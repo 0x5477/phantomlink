@@ -1,0 +1,60 @@
+# PhantomLink（幻链）— 局域网加密聊天工具
+
+跨平台局域网端到端加密聊天应用，支持文字、图片、文件传输、群组聊天、阅后即焚。
+
+## 核心特性
+
+- **端到端加密**：AES-256-GCM + X25519 ECDH + TLS 1.3 三重加密
+- **局域网 P2P**：mDNS 零配置设备发现，纯 P2P 直连，无服务器
+- **安全认证**：主密码 Argon2id 派生，空闲自动锁屏，剪贴板自动清除
+- **防拖走**：数据库全字段加密，无主密码不可解密
+- **阅后即焚**：消息级标记，阅读后自动销毁
+- **加密备份**：.plvault 加密导出包，支持新设备导入
+- **科幻 UI**：深空主题 + 霓虹辉光 + 玻璃拟态
+
+## 技术栈
+
+- **后端**：Rust + Tauri 2（AES-256-GCM / Argon2id / X25519 / Ed25519）
+- **前端**：React 19 + TypeScript + Tailwind CSS 4 + Zustand
+- **数据库**：SQLite（WAL 模式，应用层加密）
+
+## 开发
+
+```bash
+# 安装依赖
+npm install
+
+# 开发模式（需 Rust 工具链）
+npx tauri dev
+
+# 构建
+npx tauri build
+```
+
+## 构建产物
+
+| 平台 | 产物 |
+| --- | --- |
+| macOS | `.app` + `.dmg` |
+| Windows | `.msi` / `.exe`（需 Windows 构建环境） |
+
+## 数据目录
+
+- macOS: `~/Library/Application Support/.pl_session_cache/`
+- Windows: `%LOCALAPPDATA%\.pl_session_cache\`
+
+## 加密体系
+
+```
+主密码 → Argon2id(64MiB/3轮/4并行) → 主密钥 MK
+  ├── HKDF → 数据库密钥 DBK
+  ├── HKDF → 文件存储密钥 FSK
+  └── HKDF → 备份密钥 BKK
+
+网络会话: X25519 ECDH → 会话密钥 SK → AES-256-GCM 加密每条消息
+群组: GSK 共享密钥，成员变更时轮换
+```
+
+## 许可
+
+私有项目，未公开发布。
