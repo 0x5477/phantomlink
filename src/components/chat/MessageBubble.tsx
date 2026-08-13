@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef } from "react";
-import { Flame, Lock, Check, CheckCheck, Clock, AlertCircle, Play, Pause } from "lucide-react";
+import { Flame, Lock, Check, CheckCheck, Clock, AlertCircle, Play, Pause, RefreshCw } from "lucide-react";
 import type { ChatMessage } from "../../types";
 import { useStore } from "../../store";
 import { api } from "../../lib/tauri";
@@ -100,6 +100,27 @@ export default function MessageBubble({
     }
   };
 
+  const [retrying, setRetrying] = useState(false);
+
+  const retrySendVoice = async () => {
+    if (!msg.file_info || retrying) return;
+    setRetrying(true);
+    try {
+      const state = useStore.getState();
+      const conv = state.conversations.find((c) => c.conv_id === msg.conv_id);
+      const peerId = conv?.peer_device_id;
+      if (!peerId) throw new Error("no peer");
+      const b64 = await api.loadFileToBase64(msg.file_info.stored_name);
+      const duration = parseInt(msg.content) || 1;
+      await api.sendVoiceMessageFrame(peerId, msg.message_id, duration, msg.file_info.mime_type, b64);
+      state.updateMessageInStore(msg.conv_id, msg.message_id, { status: "sent" });
+    } catch (e) {
+      console.error("retry voice:", e);
+      alert("重发失败，请稍后重试");
+    }
+    setRetrying(false);
+  };
+
   // Stop playback when the bubble unmounts
   useEffect(() => {
     return () => {
@@ -171,6 +192,11 @@ export default function MessageBubble({
               ))}
             </div>
             <span className="text-xs pl-text-dim">{duration}"</span>
+            {isSelf && msg.status === "failed" && (
+              <button onClick={retrySendVoice} disabled={retrying} title="重发" className="pl-btn-ghost rounded-full p-1 flex-shrink-0 disabled:opacity-40">
+                <RefreshCw size={12} className={retrying ? "animate-spin" : ""} />
+              </button>
+            )}
             {voiceUrl && <audio ref={legacyAudioRef} src={voiceUrl} onEnded={() => setVoicePlaying(false)} className="hidden" />}
           </div>
           <div className={`flex items-center gap-1 mt-1 ${isSelf ? "justify-end" : ""}`}>

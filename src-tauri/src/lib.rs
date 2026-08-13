@@ -17,7 +17,7 @@ use db::{ChatMessage, Conversation, Database, Device, FileRecord, Message};
 use network::DiscoveredPeer;
 use protocol::Frame;
 
-const APP_VERSION: &str = "1.4.0";
+const APP_VERSION: &str = "1.4.1";
 
 // ---- Vault lifecycle ----
 
@@ -191,6 +191,27 @@ fn get_device_info(state: State<'_, Arc<AppStateData>>) -> Result<serde_json::Va
 #[tauri::command]
 fn get_app_version() -> String {
     APP_VERSION.to_string()
+}
+
+/// Save a downloaded release asset (base64) into the user's Downloads folder.
+#[tauri::command]
+fn save_downloaded_file(file_name: String, data_b64: String) -> Result<String, String> {
+    use base64::Engine as _;
+    let data = base64::engine::general_purpose::STANDARD
+        .decode(&data_b64)
+        .map_err(|e| format!("decode download: {e}"))?;
+    let dir = if let Some(home) = std::env::var_os("HOME") {
+        std::path::PathBuf::from(home).join("Downloads")
+    } else if let Some(local) = std::env::var_os("USERPROFILE") {
+        std::path::PathBuf::from(local).join("Downloads")
+    } else {
+        std::env::temp_dir()
+    };
+    std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir downloads: {e}"))?;
+    let safe_name = file_name.replace(['/', '\\', '\0'], "_");
+    let path = dir.join(safe_name);
+    std::fs::write(&path, &data).map_err(|e| format!("write download: {e}"))?;
+    Ok(path.to_string_lossy().into_owned())
 }
 
 fn record_failure(state: State<'_, Arc<AppStateData>>) -> Result<bool, String> {
@@ -514,6 +535,7 @@ fn send_voice_frame(
     channels: i64,
     state: State<'_, Arc<AppStateData>>,
 ) -> Result<(), String> {
+    ensure_peer_connected(&state, &peer_device_id)?;
     let sender_id = state.db.meta_string("device_id").unwrap_or_default();
     let frame = Frame::VoiceData {
         sender_id,
@@ -534,6 +556,7 @@ fn send_voice_call_invite(
     call_type: String,
     state: State<'_, Arc<AppStateData>>,
 ) -> Result<(), String> {
+    ensure_peer_connected(&state, &peer_device_id)?;
     let sender_id = state.db.meta_string("device_id").unwrap_or_default();
     let db_key = state.app.get_db_key()?;
     let sender_name = state.db.get_device_by_id(&db_key, &sender_id).ok().flatten().map(|d| d.display_name).unwrap_or_default();
@@ -554,6 +577,7 @@ fn send_voice_call_response(
     accepted: bool,
     state: State<'_, Arc<AppStateData>>,
 ) -> Result<(), String> {
+    ensure_peer_connected(&state, &peer_device_id)?;
     let responder_id = state.db.meta_string("device_id").unwrap_or_default();
     let db_key = state.app.get_db_key()?;
     let responder_name = state.db.get_device_by_id(&db_key, &responder_id).ok().flatten().map(|d| d.display_name).unwrap_or_default();
@@ -573,6 +597,7 @@ fn send_voice_call_end(
     room_id: String,
     state: State<'_, Arc<AppStateData>>,
 ) -> Result<(), String> {
+    ensure_peer_connected(&state, &peer_device_id)?;
     let sender_id = state.db.meta_string("device_id").unwrap_or_default();
     let frame = Frame::VoiceCallEnd { sender_id, room_id };
     state.network.send_to_peer(&peer_device_id, protocol::encode_frame(&frame))
@@ -603,6 +628,7 @@ fn voice_call_join(
     room_id: String,
     state: State<'_, Arc<AppStateData>>,
 ) -> Result<(), String> {
+    ensure_peer_connected(&state, &host_device_id)?;
     let sender_id = state.db.meta_string("device_id").unwrap_or_default();
     let db_key = state.app.get_db_key()?;
     let sender_name = state.db.get_device_by_id(&db_key, &sender_id).ok().flatten().map(|d| d.display_name).unwrap_or_default();
@@ -617,6 +643,7 @@ fn voice_call_leave(
     room_id: String,
     state: State<'_, Arc<AppStateData>>,
 ) -> Result<(), String> {
+    ensure_peer_connected(&state, &host_device_id)?;
     let sender_id = state.db.meta_string("device_id").unwrap_or_default();
     let frame = Frame::VoiceCallLeave { sender_id, room_id };
     state.network.send_to_peer(&host_device_id, protocol::encode_frame(&frame))
@@ -654,6 +681,7 @@ fn send_voice_message_frame(
     audio_b64: String,
     state: State<'_, Arc<AppStateData>>,
 ) -> Result<(), String> {
+    ensure_peer_connected(&state, &peer_device_id)?;
     let sender_id = state.db.meta_string("device_id").unwrap_or_default();
     let frame = Frame::VoiceMessage {
         message_id,
@@ -675,6 +703,7 @@ fn send_sticker_frame(
     sticker_id: String,
     state: State<'_, Arc<AppStateData>>,
 ) -> Result<(), String> {
+    ensure_peer_connected(&state, &peer_device_id)?;
     let sender_id = state.db.meta_string("device_id").unwrap_or_default();
     let frame = Frame::Message {
         message_id,
@@ -989,6 +1018,7 @@ fn connect_to_peer(ip: String, port: u16, device_id: String, state: State<'_, Ar
 
 #[tauri::command]
 fn send_frame_to_peer(device_id: String, frame_json: String, state: State<'_, Arc<AppStateData>>) -> Result<(), String> {
+    ensure_peer_connected(&state, &device_id)?;
     let frame = Frame::from_json(&frame_json)?;
     let encoded = protocol::encode_frame(&frame);
     state.network.send_to_peer(&device_id, encoded)
@@ -1000,6 +1030,7 @@ fn send_message_frame(
     content: String, burn_after_read: bool,
     state: State<'_, Arc<AppStateData>>,
 ) -> Result<(), String> {
+    ensure_peer_connected(&state, &peer_device_id)?;
     let sender_id = state.db.meta_string("device_id").unwrap_or_default();
     let timestamp = now_ms();
     let payload_b64 = base64::engine::general_purpose::STANDARD.encode(content.as_bytes());
@@ -1021,6 +1052,7 @@ fn send_file_frame(
     peer_device_id: String, message_id: String, file_id: String,
     state: State<'_, Arc<AppStateData>>,
 ) -> Result<(), String> {
+    ensure_peer_connected(&state, &peer_device_id)?;
     let file_key = state.app.get_file_key()?;
     let db_key = state.app.get_db_key()?;
     let file_rec = state.db.get_file_record(&db_key, &file_id)?.ok_or("file not found")?;
@@ -1146,6 +1178,52 @@ fn import_backup(password: String, src_path: String, state: State<'_, Arc<AppSta
 
 // ---- Utility ----
 
+/// Extract the sender device id from a frame, if it carries one.
+fn frame_sender_id(frame: &Frame) -> Option<String> {
+    match frame {
+        Frame::Message { sender_id, .. }
+        | Frame::KeyExchange { sender_id, .. }
+        | Frame::Presence { sender_id, .. }
+        | Frame::Pair { sender_id, .. }
+        | Frame::FriendRequest { sender_id, .. }
+        | Frame::VoiceCallInvite { sender_id, .. }
+        | Frame::VoiceCallEnd { sender_id, .. }
+        | Frame::VoiceData { sender_id, .. }
+        | Frame::VoiceCallJoin { sender_id, .. }
+        | Frame::VoiceCallLeave { sender_id, .. }
+        | Frame::VoiceMessage { sender_id, .. }
+        | Frame::ProfileUpdate { sender_id, .. } => Some(sender_id.clone()),
+        Frame::FriendResponse { responder_id, .. } => Some(responder_id.clone()),
+        Frame::VoiceCallResponse { responder_id, .. } => Some(responder_id.clone()),
+        _ => None,
+    }
+}
+
+/// Ensure we have a usable connection to a peer before sending.
+/// If no connection exists yet, dial them using the last known IP/port so
+/// that either side of a P2P pair can always initiate traffic.
+fn ensure_peer_connected(state: &Arc<AppStateData>, peer_device_id: &str) -> Result<(), String> {
+    if state.network.is_connected(peer_device_id) {
+        return Ok(());
+    }
+    let db_key = state.app.get_db_key()?;
+    if let Some(dev) = state.db.get_device_by_id(&db_key, peer_device_id)? {
+        if !dev.ip.is_empty() && dev.port > 0 {
+            let nm = state.network.clone();
+            let ip = dev.ip.clone();
+            let port = dev.port;
+            let did = dev.device_id.clone();
+            state.runtime.block_on(async move {
+                nm.connect_to_peer(&ip, port, did).await
+            })?;
+            if state.network.is_connected(peer_device_id) {
+                return Ok(());
+            }
+        }
+    }
+    Err(format!("no connection to {peer_device_id}"))
+}
+
 fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -1209,6 +1287,13 @@ fn spawn_frame_consumer(
                 Ok(f) => f,
                 Err(e) => { log::debug!("Failed to parse frame from {source}: {e}"); continue; }
             };
+
+            // Critical for bidirectional P2P: remember which connection a peer
+            // speaks on, so replies/outgoing frames can be routed back even if
+            // we only ever received an inbound connection from them.
+            if let Some(sender_id) = frame_sender_id(&frame) {
+                state.network.register_alias(&sender_id, &source);
+            }
 
             match frame {
                 Frame::Pair { sender_id, display_name, public_key_b64, .. } => {
@@ -1604,7 +1689,7 @@ pub fn run() {
            get_devices, get_local_ip, add_device, delete_device, discover_peers, get_connected_peers,
            get_conversations, get_or_create_private_conversation, reset_unread,
            get_messages, save_local_message, search_messages, update_message_status, burn_message, delete_message,
-           get_setting, set_setting, get_all_settings,
+           get_setting, set_setting, get_all_settings, save_downloaded_file,
            save_file_from_base64, load_file_to_base64,
            start_network, stop_network, connect_to_peer, send_frame_to_peer, send_message_frame, send_file_frame,
            export_backup, import_backup,

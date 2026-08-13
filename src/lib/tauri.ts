@@ -99,4 +99,7 @@ export const api = {
     invoke<void>("send_voice_message_frame", { peerDeviceId, messageId, durationSecs, mime, audioB64 }),
   sendStickerFrame: (peerDeviceId: string, messageId: string, stickerId: string) =>
     invoke<void>("send_sticker_frame", { peerDeviceId, messageId, stickerId }),
+  // v1.4.1: save a downloaded release asset into the user's Downloads folder
+  saveDownloadedFile: (fileName: string, dataB64: string) =>
+    invoke<string>("save_downloaded_file", { fileName, dataB64 }),
 };

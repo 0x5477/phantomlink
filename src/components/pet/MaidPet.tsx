@@ -2,34 +2,43 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { useStore } from "../../store";
 import { api } from "../../lib/tauri";
 
-// Character designs inspired by Cells at Work (工作细胞) prototypes:
-// red blood cell, white blood cell and platelet style chibi maid.
+// Character designs based on Cells at Work (工作细胞) prototypes:
+// 红细胞 AE3803 / 白细胞 U-1146 / 血小板.
 const OUTFITS = [
   {
-    id: "rbc", name: "红细胞酱",
-    hair: "#E63946", hairDark: "#C1121F", cap: "#E63946", capDark: "#C1121F",
-    uniform: "#FDF6F0", trim: "#E63946", collar: "#E63946", skirt: "#FDF6F0",
-    hatText: "赤", hatTextColor: "#FFFFFF",
+    id: "rbc", name: "红细胞酱 AE3803",
+    hair: "#E23B3B", hairDark: "#B5272E", ahoge: "#F04A4A",
+    cap: "#E23B3B", capDark: "#B5272E", capEdge: "#8F1D24",
+    uniform: "#E23B3B", shirt: "#FDF6F0", collar: "#FFFFFF", skirt: "#C32D34",
+    sleeve: "#FDF6F0", boots: "#B5272E",
+    eye: "#7A4A2B", eyeLight: "#3A2413",
+    hatLabel: "赤", hatLabelColor: "#FFFFFF",
   },
   {
-    id: "wbc", name: "白细胞君",
-    hair: "#5A6472", hairDark: "#3D4550", cap: "#F2F4F7", capDark: "#CBD2DC",
-    uniform: "#FFFFFF", trim: "#5A6472", collar: "#4A90D9", skirt: "#E8ECF2",
-    hatText: "白", hatTextColor: "#4A90D9",
+    id: "wbc", name: "白细胞君 U-1146",
+    hair: "#E8ECF2", hairDark: "#B9C2CE", ahoge: "#F4F7FB",
+    cap: "#FFFFFF", capDark: "#C6CFDA", capEdge: "#93A0B0",
+    uniform: "#F2F5F9", shirt: "#FFFFFF", collar: "#5A6472", skirt: "#D7DEE8",
+    sleeve: "#FFFFFF", boots: "#5A6472",
+    eye: "#4A5568", eyeLight: "#2B3240",
+    hatLabel: "白", hatLabelColor: "#5A6472",
   },
   {
     id: "plt", name: "血小板酱",
-    hair: "#B08968", hairDark: "#8F6B4C", cap: "#DCEBF7", capDark: "#A9C9E3",
-    uniform: "#FDF6F0", trim: "#7FB5D8", collar: "#7FB5D8", skirt: "#DCEBF7",
-    hatText: "板", hatTextColor: "#5A9BD5",
+    hair: "#C9A17E", hairDark: "#A8825F", ahoge: "#D9B48F",
+    cap: "#BFD9EE", capDark: "#8FB4D6", capEdge: "#6E96BE",
+    uniform: "#DCEBF7", shirt: "#FFFFFF", collar: "#7FB0D8", skirt: "#BFD9EE",
+    sleeve: "#FFFFFF", boots: "#8FB4D6",
+    eye: "#5A7FA8", eyeLight: "#33506E",
+    hatLabel: "板", hatLabelColor: "#4C7FA8",
   },
 ];
 
 const ACTIONS = ["wave", "heart", "wink", "spin", "bow", "sleepy"];
 const DEFAULT_RIGHT = 16;
 const DEFAULT_BOTTOM = 16;
-const PET_W = 92;
-const PET_H = 120;
+const PET_W = 96;
+const PET_H = 132;
 
 export default function MaidPet() {
   const settings = useStore((s) => s.settings);
@@ -50,7 +59,7 @@ export default function MaidPet() {
 
   const outfit = OUTFITS[outfitIdx];
 
-  // Sync position from settings when they load (e.g. first mount / reload).
+  // Sync position from settings when they load.
   useEffect(() => {
     if (settings.pet_x > 0 || settings.pet_y > 0) {
       setPos({
@@ -138,7 +147,6 @@ export default function MaidPet() {
     dragRef.current = null;
     setDragging(false);
     setPos({ right: finalRight, bottom: finalBottom });
-    // Persist the new position
     api.setSetting("pet_x", String(finalRight)).catch(() => {});
     api.setSetting("pet_y", String(finalBottom)).catch(() => {});
   };
@@ -146,7 +154,7 @@ export default function MaidPet() {
   if (!settings.pet_enabled) return null;
 
   const floatY = dragging ? 0 : Math.sin(floatPhase * 0.03) * 4;
-  const capIcon = outfit.hatText;
+  const o = outfit;
 
   return (
     <div
@@ -160,7 +168,7 @@ export default function MaidPet() {
     >
       {/* Speech bubble */}
       {bubbleText && (
-        <div className="absolute bottom-[104px] right-2 pl-glass-strong rounded-2xl px-3 py-1.5 text-xs whitespace-nowrap pl-fade-in z-10"
+        <div className="absolute bottom-[116px] right-2 pl-glass-strong rounded-2xl px-3 py-1.5 text-xs whitespace-nowrap pl-fade-in z-10"
           style={{ animation: "pl-bounce-in 0.3s ease both", pointerEvents: "none" }}>
           {bubbleText}
         </div>
@@ -168,119 +176,141 @@ export default function MaidPet() {
 
       {/* Outfit selector */}
       {showOutfits && (
-        <div className="absolute bottom-[96px] right-0 pl-glass-strong rounded-xl p-2 flex flex-col gap-1 z-10"
+        <div className="absolute bottom-[106px] right-0 pl-glass-strong rounded-xl p-2 flex flex-col gap-1 z-10"
           style={{ animation: "pl-fade-in 0.2s ease both", pointerEvents: "auto" }}>
-          {OUTFITS.map((o, i) => (
-            <button key={o.id} onClick={(e) => { e.stopPropagation(); setOutfitIdx(i); setShowOutfits(false); showBubble("换装完成~"); }}
+          {OUTFITS.map((out, i) => (
+            <button key={out.id} onClick={(e) => { e.stopPropagation(); setOutfitIdx(i); setShowOutfits(false); showBubble("换装完成~"); }}
               className={`text-xs px-3 py-1.5 rounded-lg whitespace-nowrap transition-all ${i === outfitIdx ? "bg-cyan-500/20 pl-text-cyan" : "hover:bg-white/5 pl-text-dim"}`}>
-              {o.name}
+              {out.name}
             </button>
           ))}
         </div>
       )}
 
-      {/* The character */}
+      {/* The character (Cells at Work style) */}
       <div className="relative" style={{ transform: `translateY(${floatY}px)`, pointerEvents: dragging ? "none" : "auto" }} onClick={handleClick}>
-        <svg width={PET_W} height={PET_H} viewBox="0 0 92 120" style={{ filter: `drop-shadow(0 4px 8px ${outfit.trim}44)` }}>
-          {/* Action transforms */}
+        <svg width={PET_W} height={PET_H} viewBox="0 0 100 138" style={{ filter: `drop-shadow(0 4px 10px ${o.uniform}55)` }}>
           <g style={{
-            transformOrigin: "46px 62px",
+            transformOrigin: "50px 70px",
             transition: "transform 0.3s ease",
             ...(action === "spin" ? { animation: "pl-maid-spin 1s linear" } : {}),
             ...(action === "bow" ? { transform: "rotateX(28deg)" } : {}),
             ...(action === "sleepy" ? { transform: "rotate(-10deg) translateY(5px)" } : {}),
           }}>
-            {/* Shadow */}
-            <ellipse cx="46" cy="116" rx="20" ry="3" fill="#000" opacity="0.12" />
+            {/* Ground shadow */}
+            <ellipse cx="50" cy="134" rx="24" ry="3.5" fill="#000" opacity="0.13" />
 
-            {/* Body / uniform */}
-            <path d="M30 56 Q30 51 36 49 L56 49 Q62 51 62 56 L68 96 Q68 104 62 108 L30 108 Q24 104 24 96 Z"
-              fill={outfit.uniform} stroke={outfit.trim} strokeWidth="1.2" />
+            {/* ===== Body: red work uniform (红细胞制服) ===== */}
             {/* Skirt */}
-            <path d="M24 92 Q46 100 68 92 L66 108 Q46 114 26 108 Z" fill={outfit.skirt} stroke={outfit.trim} strokeWidth="1" opacity="0.95" />
-            {/* Collar */}
-            <path d="M36 49 L40 62 L46 50 L52 62 L56 49 Z" fill={outfit.collar} stroke={outfit.trim} strokeWidth="0.8" />
+            <path d="M28 100 Q50 110 72 100 L70 120 Q50 128 30 120 Z" fill={o.skirt} stroke={o.uniform} strokeWidth="1" />
+            {/* Torso / outer coat */}
+            <path d="M32 58 Q32 53 38 51 L62 51 Q68 53 68 58 L73 100 Q73 104 68 106 L32 106 Q27 104 27 100 Z"
+              fill={o.uniform} stroke={o.capDark} strokeWidth="1.2" />
+            {/* White shirt V-neck */}
+            <path d="M38 51 L43 64 L50 53 L57 64 L62 51 Q50 47 38 51 Z" fill={o.shirt} stroke={o.capDark} strokeWidth="0.7" />
+            {/* Collar / tie */}
+            <path d="M50 53 L46 66 L50 70 L54 66 Z" fill={o.collar} stroke={o.capDark} strokeWidth="0.6" />
             {/* Buttons */}
-            <circle cx="46" cy="70" r="1.6" fill={outfit.trim} />
-            <circle cx="46" cy="78" r="1.6" fill={outfit.trim} />
-            {/* Arms */}
+            <circle cx="50" cy="78" r="1.7" fill={o.shirt} stroke={o.capDark} strokeWidth="0.6" />
+            <circle cx="50" cy="86" r="1.7" fill={o.shirt} stroke={o.capDark} strokeWidth="0.6" />
+
+            {/* Arms with white sleeves */}
             {(action === "wave" || action === "heart") ? (
               <path d={action === "wave"
-                ? "M58 58 Q70 44 73 32 Q74 26 68 26 Q64 28 60 38"
-                : "M32 58 Q24 48 28 42 Q34 39 37 46 M60 58 Q68 48 64 42 Q58 39 55 46"}
-                fill={outfit.uniform} stroke={outfit.trim} strokeWidth="1.2" />
+                ? "M66 60 Q78 44 82 30 Q83 24 77 24 Q72 26 68 38"
+                : "M34 60 Q24 48 28 41 Q35 38 39 46 M66 60 Q76 48 72 41 Q65 38 61 46"}
+                fill={o.uniform} stroke={o.capDark} strokeWidth="1.2" />
             ) : (
               <>
-                <path d="M30 56 Q24 66 26 80" fill="none" stroke={outfit.trim} strokeWidth="5.5" strokeLinecap="round" />
-                <path d="M62 56 Q68 66 66 80" fill="none" stroke={outfit.trim} strokeWidth="5.5" strokeLinecap="round" />
+                <path d="M32 58 Q24 70 27 86" fill="none" stroke={o.uniform} strokeWidth="7" strokeLinecap="round" />
+                <path d="M68 58 Q76 70 73 86" fill="none" stroke={o.uniform} strokeWidth="7" strokeLinecap="round" />
+                <path d="M32 58 Q24 70 27 86" fill="none" stroke={o.sleeve} strokeWidth="4" strokeLinecap="round" strokeDasharray="0.1 4" />
+                <path d="M68 58 Q76 70 73 86" fill="none" stroke={o.sleeve} strokeWidth="4" strokeLinecap="round" strokeDasharray="0.1 4" />
               </>
             )}
             {/* Hands */}
-            <circle cx="26" cy="82" r="3" fill="#FFE3D0" />
-            <circle cx="66" cy="82" r="3" fill="#FFE3D0" />
+            <circle cx="27" cy="88" r="3.4" fill="#FFE3D0" />
+            <circle cx="73" cy="88" r="3.4" fill="#FFE3D0" />
 
-            {/* Head */}
-            <circle cx="46" cy="32" r="17" fill="#FFE3D0" stroke="#EEC3A0" strokeWidth="0.6" />
-            {/* Hair */}
-            <path d="M29 30 Q27 18 35 13 Q41 10 46 12 Q51 10 57 13 Q65 18 63 30 Q63 36 61 39 L31 39 Q29 36 29 30 Z"
-              fill={outfit.hair} stroke={outfit.hairDark} strokeWidth="0.8" />
-            {/* Hair side locks */}
-            <path d="M30 32 Q26 42 28 52 Q30 56 32 52 Q33 44 33 36 Z" fill={outfit.hairDark} />
-            <path d="M62 32 Q66 42 64 52 Q62 56 60 52 Q59 44 59 36 Z" fill={outfit.hairDark} />
+            {/* Boots */}
+            <path d="M34 120 Q34 126 39 127 L43 127 Q46 124 45 120 Z" fill={o.boots} />
+            <path d="M55 120 Q54 124 57 127 L61 127 Q66 126 66 120 Z" fill={o.boots} />
 
-            {/* Red-blood-cell cap (biconcave disc) */}
-            <g transform="translate(46 15)">
-              <ellipse cx="0" cy="0" rx="17" ry="9" fill={outfit.cap} stroke={outfit.capDark} strokeWidth="1" />
-              <ellipse cx="0" cy="0" rx="7" ry="4.5" fill={outfit.hair} opacity="0.55" />
-              <text x="0" y="2.5" textAnchor="middle" fontSize="6.5" fontWeight="bold" fill={outfit.hatTextColor}>{capIcon}</text>
+            {/* ===== Head ===== */}
+            <circle cx="50" cy="36" r="19" fill="#FFE3D0" stroke="#EEC3A0" strokeWidth="0.7" />
+
+            {/* Red short hair */}
+            <path d="M31 34 Q29 19 38 13 Q44 9 50 11 Q56 9 62 13 Q71 19 69 34 Q69 40 67 44 L33 44 Q31 40 31 34 Z"
+              fill={o.hair} stroke={o.hairDark} strokeWidth="0.9" />
+            {/* Side locks */}
+            <path d="M32 36 Q27 48 30 60 Q32 65 35 60 Q37 50 36 40 Z" fill={o.hairDark} />
+            <path d="M68 36 Q73 48 70 60 Q68 65 65 60 Q63 50 64 40 Z" fill={o.hairDark} />
+            {/* Ahoge (呆毛) */}
+            <path d="M50 12 Q54 4 63 3 Q66 3 64 6 Q58 8 55 13 Z" fill={o.ahoge} />
+
+            {/* Red blood cell work cap (biconcave disc) */}
+            <g transform="translate(50 18) rotate(-6)">
+              {/* disc body */}
+              <ellipse cx="0" cy="0" rx="20" ry="10.5" fill={o.cap} stroke={o.capEdge} strokeWidth="1.3" />
+              {/* concave dimple */}
+              <ellipse cx="0" cy="0" rx="9" ry="5" fill={o.capDark} opacity="0.55" />
+              <ellipse cx="0" cy="-1.5" rx="7" ry="3.4" fill={o.hair} opacity="0.5" />
+              {/* highlight */}
+              <ellipse cx="-9" cy="-5" rx="5" ry="2.4" fill="#FFFFFF" opacity="0.5" />
+              {/* label */}
+              <text x="0" y="2.6" textAnchor="middle" fontSize="7" fontWeight="bold" fill={o.hatLabelColor}>{o.hatLabel}</text>
             </g>
 
-            {/* Eyes */}
+            {/* ===== Face ===== */}
+            {/* Eyes (large anime style) */}
             {action === "wink" ? (
               <>
-                <ellipse cx="40" cy="32" rx="2.4" ry="3" fill="#2B1B12" />
-                <path d="M49 31 Q51 30 53 31" fill="none" stroke="#2B1B12" strokeWidth="1.6" strokeLinecap="round" />
+                <ellipse cx="42" cy="37" rx="3.2" ry="4" fill={o.eyeLight} />
+                <path d="M54 35 Q56.5 33.5 59 35" fill="none" stroke={o.eyeLight} strokeWidth="1.8" strokeLinecap="round" />
               </>
             ) : action === "sleepy" || blink ? (
               <>
-                <path d="M38 32 Q40 33 42 32" fill="none" stroke="#2B1B12" strokeWidth="1.6" strokeLinecap="round" />
-                <path d="M50 32 Q52 33 54 32" fill="none" stroke="#2B1B12" strokeWidth="1.6" strokeLinecap="round" />
+                <path d="M39 37 Q42 38.5 45 37" fill="none" stroke={o.eyeLight} strokeWidth="1.8" strokeLinecap="round" />
+                <path d="M55 37 Q58 38.5 61 37" fill="none" stroke={o.eyeLight} strokeWidth="1.8" strokeLinecap="round" />
               </>
             ) : (
               <>
-                <ellipse cx="40" cy="32" rx="2.6" ry="3.4" fill="#2B1B12" />
-                <ellipse cx="52" cy="32" rx="2.6" ry="3.4" fill="#2B1B12" />
-                <circle cx="40.8" cy="30.8" r="1" fill="white" />
-                <circle cx="52.8" cy="30.8" r="1" fill="white" />
+                <ellipse cx="42" cy="37" rx="3.6" ry="4.6" fill={o.eye} />
+                <ellipse cx="58" cy="37" rx="3.6" ry="4.6" fill={o.eye} />
+                <circle cx="43" cy="35" r="1.5" fill="#FFFFFF" />
+                <circle cx="59" cy="35" r="1.5" fill="#FFFFFF" />
+                <circle cx="41" cy="38.5" r="0.8" fill="#FFFFFF" opacity="0.8" />
+                <circle cx="57" cy="38.5" r="0.8" fill="#FFFFFF" opacity="0.8" />
+                <path d="M45 42 Q50 44 55 42" fill="none" stroke={o.eyeLight} strokeWidth="1" opacity="0.35" />
               </>
             )}
             {/* Blush */}
-            <circle cx="36" cy="37" r="2.4" fill="#FF8FA3" opacity="0.45" />
-            <circle cx="56" cy="37" r="2.4" fill="#FF8FA3" opacity="0.45" />
+            <circle cx="37" cy="43" r="3" fill="#FF8FA3" opacity="0.5" />
+            <circle cx="63" cy="43" r="3" fill="#FF8FA3" opacity="0.5" />
             {/* Mouth */}
             {action === "heart" ? (
-              <path d="M43 40 Q45 43 47 40 Q49 38 47 37 Q45 36 43 37 Q41 38 43 40" fill="#FF6B9D" />
+              <path d="M47 47 Q50 51 53 47 Q55.5 44 53 43 Q50 41.5 47 43 Q44.5 44 47 47" fill="#FF6B9D" />
             ) : action === "sleepy" ? (
-              <ellipse cx="46" cy="40" rx="1.8" ry="1.1" fill="#E88" opacity="0.5" />
+              <ellipse cx="50" cy="47" rx="2.2" ry="1.3" fill="#E88" opacity="0.5" />
             ) : (
-              <path d="M43 39 Q46 42 49 39" fill="none" stroke="#C66" strokeWidth="1.2" strokeLinecap="round" />
+              <path d="M46 46 Q50 50 54 46" fill="none" stroke="#C66" strokeWidth="1.3" strokeLinecap="round" />
             )}
 
             {/* Heart for heart action */}
             {action === "heart" && (
-              <text x="68" y="22" fontSize="12" style={{ animation: "pl-float-up 1s ease-out forwards" }}>❤️</text>
+              <text x="74" y="24" fontSize="13" style={{ animation: "pl-float-up 1s ease-out forwards" }}>❤️</text>
             )}
             {/* Zzz for sleepy */}
             {action === "sleepy" && (
               <>
-                <text x="66" y="18" fontSize="9" opacity="0.6" style={{ animation: "pl-float-up 2s ease-in-out infinite" }}>z</text>
-                <text x="71" y="13" fontSize="7" opacity="0.4" style={{ animation: "pl-float-up 2s ease-in-out 0.5s infinite" }}>z</text>
+                <text x="72" y="20" fontSize="10" opacity="0.6" style={{ animation: "pl-float-up 2s ease-in-out infinite" }}>z</text>
+                <text x="78" y="14" fontSize="7" opacity="0.4" style={{ animation: "pl-float-up 2s ease-in-out 0.5s infinite" }}>z</text>
               </>
             )}
           </g>
         </svg>
 
-        {/* Outfit / dressing button */}
+        {/* Dressing button */}
         <button
           onPointerDown={(e) => e.stopPropagation()}
           onClick={(e) => { e.stopPropagation(); setShowOutfits(!showOutfits); }}

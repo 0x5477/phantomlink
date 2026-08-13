@@ -18,6 +18,10 @@ export default function SettingsPanel() {
   const [showSelfDestruct, setShowSelfDestruct] = useState(false);
   const [destructConfirm, setDestructConfirm] = useState("");
   const [destructing, setDestructing] = useState(false);
+  const [updateState, setUpdateState] = useState<"idle" | "checking" | "latest" | "available" | "error">("idle");
+  const [updateInfo, setUpdateInfo] = useState<{ tag: string; name: string; url: string } | null>(null);
+  const [downloading, setDownloading] = useState(false);
+  const [downloadMsg, setDownloadMsg] = useState("");
 
   // Profile editing
   const [editName, setEditName] = useState(deviceName || "");
@@ -70,6 +74,76 @@ export default function SettingsPanel() {
       console.error("update profile:", e);
       alert("保存失败: " + e);
     }
+  };
+
+  // ---- Update check / download from GitHub ----
+  const GH_REPO = "0x5477/phantomlink";
+
+  const cmpVersion = (a: string, b: string): number => {
+    const pa = a.replace(/^v/, "").split(".").map(Number);
+    const pb = b.replace(/^v/, "").split(".").map(Number);
+    for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+      const x = pa[i] || 0, y = pb[i] || 0;
+      if (x !== y) return x - y;
+    }
+    return 0;
+  };
+
+  const pickAsset = (assets: { name: string; browser_download_url: string }[]) => {
+    const isMac = /Mac|iPhone|iPad/i.test(navigator.userAgent);
+    if (isMac) {
+      return assets.find((a) => a.name.includes("aarch64") && a.name.endsWith(".dmg"))
+        || assets.find((a) => a.name.endsWith(".dmg"));
+    }
+    return assets.find((a) => a.name.endsWith(".exe"))
+      || assets.find((a) => a.name.endsWith(".msi"))
+      || assets[0];
+  };
+
+  const handleCheckUpdate = async () => {
+    setUpdateState("checking");
+    setDownloadMsg("");
+    try {
+      const res = await fetch(`https://api.github.com/repos/${GH_REPO}/releases/latest`);
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      const rel = await res.json();
+      const tag = String(rel.tag_name || "").replace(/^v/, "");
+      const cur = String(appVersion || "1.4.1").replace(/^v/, "");
+      setUpdateInfo({ tag: rel.tag_name, name: rel.name || "", url: rel.html_url || `https://github.com/${GH_REPO}/releases` });
+      setUpdateState(cmpVersion(tag, cur) > 0 ? "available" : "latest");
+    } catch (e) {
+      console.error("check update:", e);
+      setUpdateState("error");
+    }
+  };
+
+  const handleDownloadUpdate = async () => {
+    if (!updateInfo) return;
+    setDownloading(true);
+    setDownloadMsg("");
+    try {
+      const res = await fetch(`https://api.github.com/repos/${GH_REPO}/releases/latest`);
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      const rel = await res.json();
+      const asset = pickAsset(rel.assets || []);
+      if (!asset) throw new Error("no asset for this platform");
+      const dl = await fetch(asset.browser_download_url);
+      if (!dl.ok) throw new Error("download HTTP " + dl.status);
+      const buf = await dl.arrayBuffer();
+      const bytes = new Uint8Array(buf);
+      let b64 = "";
+      const CH = 0x8000;
+      for (let i = 0; i < bytes.length; i += CH) b64 += String.fromCharCode(...bytes.subarray(i, i + CH));
+      const path = await api.saveDownloadedFile(asset.name, btoa(b64));
+      setDownloadMsg(`已下载到：${path}`);
+      alert(`新版本安装包已下载到：
+${path}`);
+    } catch (e) {
+      console.error("download update:", e);
+      setDownloadMsg("自动下载失败，已打开 Release 页面");
+      if (updateInfo.url) window.open(updateInfo.url, "_blank");
+    }
+    setDownloading(false);
   };
 
   return (
@@ -217,7 +291,7 @@ export default function SettingsPanel() {
           <div className="space-y-2">
             <div className="flex justify-between text-xs">
               <span className="pl-text-dim">当前版本</span>
-              <span className="font-mono pl-text-cyan">v{appVersion || "1.3.0"}</span>
+              <span className="font-mono pl-text-cyan">v{appVersion || "1.4.1"}</span>
             </div>
             <div className="flex justify-between text-xs">
               <span className="pl-text-dim">加密方案</span>
@@ -228,18 +302,29 @@ export default function SettingsPanel() {
               <span className="font-mono">LAN P2P (mDNS)</span>
             </div>
           </div>
-          <div className="flex gap-2 mt-4">
-            <button onClick={() => alert(`当前版本: v${appVersion || "1.3.0"}\n请前往 GitHub Releases 检查最新版本`)}
-              className="pl-btn-ghost flex-1 py-2 rounded-lg text-xs flex items-center justify-center gap-1.5">
+                    <div className="mt-3 pl-glass rounded-lg p-3 text-xs">
+            {updateState === "checking" && <p className="pl-text-dim">正在检查更新...</p>}
+            {updateState === "latest" && <p className="pl-text-green">✓ 已是最新版本（{updateInfo?.tag || ""}）</p>}
+            {updateState === "available" && <p className="text-cyan-400">★ 发现新版本 {updateInfo?.tag || ""}，点击下方"立即更新"下载</p>}
+            {updateState === "error" && <p className="text-red-400">检查更新失败，请检查网络后重试</p>}
+            {downloadMsg && <p className="pl-text-dim mt-1 break-all">{downloadMsg}</p>}
+          </div>
+          <div className="flex gap-2 mt-3">
+            <button onClick={handleCheckUpdate} disabled={updateState === "checking"}
+              className="pl-btn-ghost flex-1 py-2 rounded-lg text-xs flex items-center justify-center gap-1.5 disabled:opacity-40">
               <AlertTriangle size={14} />
-              检测更新
+              {updateState === "checking" ? "检查中..." : "检测更新"}
             </button>
-            <button onClick={() => window.open("https://github.com/0x5477/phantomlink/releases", "_blank")}
-              className="pl-btn-ghost flex-1 py-2 rounded-lg text-xs flex items-center justify-center gap-1.5">
+            <button onClick={handleDownloadUpdate} disabled={downloading || updateState !== "available"}
+              className={`flex-1 py-2 rounded-lg text-xs flex items-center justify-center gap-1.5 disabled:opacity-40 ${updateState === "available" ? "pl-btn-primary" : "pl-btn-ghost"}`}>
               <Database size={14} />
-              立即更新
+              {downloading ? "下载中..." : "立即更新"}
             </button>
           </div>
+          <button onClick={() => window.open("https://github.com/0x5477/phantomlink/releases", "_blank")}
+            className="pl-btn-ghost w-full mt-2 py-2 rounded-lg text-xs">
+            前往 GitHub Releases 页面
+          </button>
         </div>
       </Section>
 

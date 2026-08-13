@@ -30,6 +30,7 @@ export default function VoiceCallModal() {
   const gainRef = useRef<GainNode | null>(null);
   const sequenceRef = useRef(0);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const ringTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const unlistenersRef = useRef<UnlistenFn[]>([]);
   const joinedRef = useRef(false);
   const mutedRef = useRef(false);
@@ -57,6 +58,7 @@ export default function VoiceCallModal() {
 
   const cleanupAudio = () => {
     if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
+    if (ringTimeoutRef.current) { clearTimeout(ringTimeoutRef.current); ringTimeoutRef.current = null; }
     try { processorRef.current?.disconnect(); } catch {}
     try { sourceRef.current?.disconnect(); } catch {}
     try { gainRef.current?.disconnect(); } catch {}
@@ -236,6 +238,17 @@ export default function VoiceCallModal() {
     }
     return () => { if (timerRef.current) clearInterval(timerRef.current); };
   }, [callState]);
+
+  // Outgoing ring timeout: auto-cancel after 45s if nobody answers.
+  useEffect(() => {
+    if (callState === "ringing" && !voiceCallIncoming) {
+      ringTimeoutRef.current = setTimeout(() => {
+        alert("对方无人接听，通话已结束");
+        endCall();
+      }, 45000);
+    }
+    return () => { if (ringTimeoutRef.current) { clearTimeout(ringTimeoutRef.current); ringTimeoutRef.current = null; } };
+  }, [callState, voiceCallIncoming]);
 
   const acceptCall = async () => {
     if (!voiceCallPeerId || !voiceCallRoomId) return;
