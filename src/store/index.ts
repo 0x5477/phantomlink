@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   AppView, AppSettings, ChatMessage, Conversation, Device, NavSection,
+  FriendRequest,
 } from "../types";
 import { api } from "../lib/tauri";
 
@@ -21,6 +22,12 @@ interface AppState {
   pairingCode: string;
   fingerprint: string;
   appVersion: string;
+  friendRequests: FriendRequest[];
+  voiceCallActive: boolean;
+  voiceCallRoomId: string | null;
+  voiceCallPeerId: string | null;
+  voiceCallPeerName: string;
+  voiceCallIncoming: boolean;
 
   setView: (v: AppView) => void;
   setNavSection: (s: NavSection) => void;
@@ -29,8 +36,10 @@ interface AppState {
   loadMessages: (convId: string) => Promise<void>;
   loadDevices: () => Promise<void>;
   loadSettings: () => Promise<void>;
+  loadFriendRequests: () => Promise<void>;
   setLocked: (v: boolean) => void;
   setNetworkActive: (v: boolean) => void;
+  setVoiceCall: (s: Partial<{ active: boolean; roomId: string | null; peerId: string | null; peerName: string; incoming: boolean }>) => void;
   appendMessage: (convId: string, msg: ChatMessage) => void;
   updateMessageInStore: (convId: string, messageId: string, updates: Partial<ChatMessage>) => void;
   removeMessage: (convId: string, messageId: string) => void;
@@ -74,6 +83,12 @@ export const useStore = create<AppState>((set, get) => ({
   pairingCode: "",
   fingerprint: "",
   appVersion: "",
+  friendRequests: [],
+  voiceCallActive: false,
+  voiceCallRoomId: null,
+  voiceCallPeerId: null,
+  voiceCallPeerName: "",
+  voiceCallIncoming: false,
 
   setView: (v) => set({ view: v }),
   setNavSection: (s) => set({ navSection: s }),
@@ -107,8 +122,22 @@ export const useStore = create<AppState>((set, get) => ({
     } catch (e) { console.error("loadSettings:", e); }
   },
 
+  loadFriendRequests: async () => {
+    try {
+      const reqs = await api.getFriendRequests();
+      set({ friendRequests: reqs });
+    } catch (e) { console.error("loadFriendRequests:", e); }
+  },
+
   setLocked: (v) => set({ locked: v, view: v ? "locked" : "main" }),
   setNetworkActive: (v) => set({ networkActive: v }),
+  setVoiceCall: (s) => set((state) => ({
+    voiceCallActive: s.active ?? state.voiceCallActive,
+    voiceCallRoomId: s.roomId !== undefined ? s.roomId : state.voiceCallRoomId,
+    voiceCallPeerId: s.peerId !== undefined ? s.peerId : state.voiceCallPeerId,
+    voiceCallPeerName: s.peerName ?? state.voiceCallPeerName,
+    voiceCallIncoming: s.incoming ?? state.voiceCallIncoming,
+  })),
 
   appendMessage: (convId, msg) =>
     set((state) => ({
@@ -143,33 +172,33 @@ export const useStore = create<AppState>((set, get) => ({
     } catch { set({ view: "setup" }); }
   },
 
- unlock: async (password) => {
-   try {
-     // If this is a UI-only lock (keys still in memory), dismiss without re-deriving
-     if (get().view === "locked") {
-       const alreadyUnlocked = await api.isUnlocked();
-       if (alreadyUnlocked) {
-         set({ view: "main", locked: false });
-         return true;
-       }
-     }
-     await api.unlockVault(password);
-     const did = await api.getDeviceId();
-     let dname = "Unknown";
-     try { dname = await api.getDeviceName(); } catch {}
-     const ver = await api.getAppVersion();
-     set({ view: "main", deviceId: did, deviceName: dname, locked: false, appVersion: ver });
-     await get().refreshAll();
-     try {
-       const info = await api.startNetwork(dname);
-       set({ networkActive: true, localIps: info.local_ips, fingerprint: info.fingerprint });
-     } catch (e) { console.error("startNetwork:", e); }
-     return true;
-   } catch (e) {
-     console.error("unlock:", e);
-     throw e;
-   }
- },
+  unlock: async (password) => {
+    try {
+      if (get().view === "locked") {
+        const alreadyUnlocked = await api.isUnlocked();
+        if (alreadyUnlocked) {
+          set({ view: "main", locked: false });
+          return true;
+        }
+      }
+      await api.unlockVault(password);
+      const did = await api.getDeviceId();
+      let dname = "Unknown";
+      try { dname = await api.getDeviceName(); } catch {}
+      const ver = await api.getAppVersion();
+      set({ view: "main", deviceId: did, deviceName: dname, locked: false, appVersion: ver });
+      await get().refreshAll();
+      try {
+        const info = await api.startNetwork(dname);
+        set({ networkActive: true, localIps: info.local_ips, fingerprint: info.fingerprint });
+      } catch (e) { console.error("startNetwork:", e); }
+      await get().loadFriendRequests();
+      return true;
+    } catch (e) {
+      console.error("unlock:", e);
+      throw e;
+    }
+  },
 
   setup: async (password, deviceName) => {
     try {
@@ -189,14 +218,12 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   lock: async () => {
-    // UI-only lock: keys stay in memory, network stays active.
-    // Messages can still be received and stored while locked.
     try { await api.lockVault(); } catch {}
     set({ locked: true, view: "locked" });
   },
 
   refreshAll: async () => {
-    await Promise.all([get().loadConversations(), get().loadDevices(), get().loadSettings()]);
+    await Promise.all([get().loadConversations(), get().loadDevices(), get().loadSettings(), get().loadFriendRequests()]);
   },
 
   setupEventListeners: async () => {
@@ -238,6 +265,51 @@ export const useStore = create<AppState>((set, get) => ({
             break;
           }
         }
+      }),
+    );
+
+    // Friend request events
+    unlisteners.push(
+      await listen("friend-request-received", async () => {
+        await get().loadFriendRequests();
+      }),
+    );
+    unlisteners.push(
+      await listen("friend-request-accepted", async () => {
+        await get().loadDevices();
+        await get().loadConversations();
+      }),
+    );
+    unlisteners.push(
+      await listen("friend-request-rejected", async () => {
+        await get().loadFriendRequests();
+      }),
+    );
+
+    // Profile update
+    unlisteners.push(
+      await listen<{ device_id: string; display_name: string }>("profile-update", async () => {
+        await get().loadDevices();
+        await get().loadConversations();
+      }),
+    );
+
+    // Voice call events
+    unlisteners.push(
+      await listen<{ sender_id: string; sender_name: string; room_id: string }>("voice-call-invite", (event) => {
+        get().setVoiceCall({ active: true, incoming: true, roomId: event.payload.room_id, peerId: event.payload.sender_id, peerName: event.payload.sender_name });
+      }),
+    );
+    unlisteners.push(
+      await listen<{ responder_id: string; room_id: string; accepted: boolean }>("voice-call-response", (event) => {
+        if (!event.payload.accepted) {
+          get().setVoiceCall({ active: false, roomId: null, peerId: null, peerName: "", incoming: false });
+        }
+      }),
+    );
+    unlisteners.push(
+      await listen("voice-call-end", () => {
+        get().setVoiceCall({ active: false, roomId: null, peerId: null, peerName: "", incoming: false });
       }),
     );
 

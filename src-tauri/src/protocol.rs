@@ -92,7 +92,70 @@ pub enum Frame {
         sender_id: String,
         display_name: String,
         public_key_b64: String,
-        code: String, // 6-digit pairing code
+       code: String, // 6-digit pairing code
+   },
+
+    /// Friend request: sent when user wants to add someone as a friend.
+    #[serde(rename = "friend_request")]
+    FriendRequest {
+        sender_id: String,
+        display_name: String,
+        public_key_b64: String,
+        fingerprint: String,
+    },
+
+    /// Friend response: accept or reject a friend request.
+    #[serde(rename = "friend_response")]
+    FriendResponse {
+        responder_id: String,
+        requester_id: String,
+        accepted: bool,
+        display_name: String,
+        public_key_b64: String,
+        fingerprint: String,
+    },
+
+    /// Voice call invitation.
+    #[serde(rename = "voice_call_invite")]
+    VoiceCallInvite {
+        sender_id: String,
+        sender_name: String,
+        room_id: String,
+        call_type: String,
+    },
+
+    /// Voice call response (accept/reject).
+    #[serde(rename = "voice_call_response")]
+    VoiceCallResponse {
+        responder_id: String,
+        responder_name: String,
+        room_id: String,
+        accepted: bool,
+    },
+
+    /// Voice call end notification.
+    #[serde(rename = "voice_call_end")]
+    VoiceCallEnd {
+        sender_id: String,
+        room_id: String,
+    },
+
+    /// Real-time voice data chunk.
+    #[serde(rename = "voice_data")]
+    VoiceData {
+        sender_id: String,
+        room_id: String,
+        sequence: i64,
+        audio_data: String,
+        sample_rate: i64,
+        channels: i64,
+    },
+
+    /// Profile update notification.
+    #[serde(rename = "profile_update")]
+    ProfileUpdate {
+        sender_id: String,
+        display_name: String,
     },
 }
 

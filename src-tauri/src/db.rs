@@ -189,10 +189,21 @@ impl Database {
                 expires_at     INTEGER
             );
 
-            CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages(conv_id, timestamp);
-            CREATE INDEX IF NOT EXISTS idx_messages_status ON messages(status);
-            CREATE INDEX IF NOT EXISTS idx_outbox_recipient ON outbox(recipient_id);
-            "#,
+           CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages(conv_id, timestamp);
+           CREATE INDEX IF NOT EXISTS idx_messages_status ON messages(status);
+           CREATE INDEX IF NOT EXISTS idx_outbox_recipient ON outbox(recipient_id);
+ 
+            CREATE TABLE IF NOT EXISTS friend_requests (
+                request_id      TEXT PRIMARY KEY,
+                from_device_id  TEXT,
+                from_name       BLOB,
+                from_public_key BLOB,
+                from_fingerprint TEXT,
+                status          TEXT DEFAULT 'pending',
+                created_at      INTEGER,
+                responded_at    INTEGER
+            );
+           "#,
         )
         .map_err(|e| format!("db schema: {e}"))?;
 
@@ -807,8 +818,67 @@ impl Database {
     pub fn wipe_all(&self) -> Result<(), String> {
         let conn = self.conn.lock().unwrap();
         conn.execute_batch(
-            "DELETE FROM messages; DELETE FROM conversations; DELETE FROM devices; DELETE FROM files; DELETE FROM groups; DELETE FROM outbox; DELETE FROM meta; VACUUM;",
+            "DELETE FROM messages; DELETE FROM conversations; DELETE FROM devices; DELETE FROM files; DELETE FROM groups; DELETE FROM outbox; DELETE FROM meta; DELETE FROM friend_requests; VACUUM;",
         ).map_err(|e| format!("db wipe: {e}"))?;
+        Ok(())
+    }
+
+    // ---- Profile ----
+
+    pub fn update_device_name(&self, key: &Zeroizing<[u8; 32]>, device_id: &str, new_name: &str) -> Result<(), String> {
+        let name_enc = crypto::encrypt_field(key.as_ref(), new_name.as_bytes())?;
+        let conn = self.conn.lock().unwrap();
+        conn.execute("UPDATE devices SET display_name=?1 WHERE device_id=?2", params![name_enc, device_id])
+            .map_err(|e| format!("db update_name: {e}"))?;
+        Ok(())
+    }
+
+    pub fn set_avatar(&self, device_id: &str, avatar_b64: &str) -> Result<(), String> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("UPDATE devices SET avatar=?1 WHERE device_id=?2", params![avatar_b64.as_bytes(), device_id])
+            .map_err(|e| format!("db set_avatar: {e}"))?;
+        Ok(())
+    }
+
+    pub fn get_avatar(&self, device_id: &str) -> Result<Option<String>, String> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT avatar FROM devices WHERE device_id=?1").map_err(|e| format!("db prepare: {e}"))?;
+        let mut rows = stmt.query(params![device_id]).map_err(|e| format!("db query: {e}"))?;
+        if let Some(row) = rows.next().map_err(|e| format!("db row: {e}"))? {
+            let avatar: Option<Vec<u8>> = row.get(0).map_err(|e| format!("db get: {e}"))?;
+            Ok(avatar.map(|v| String::from_utf8_lossy(&v).to_string()))
+        } else { Ok(None) }
+    }
+
+    pub fn insert_friend_request(&self, key: &Zeroizing<[u8; 32]>, request_id: &str, from_device_id: &str, from_name: &str, from_public_key: &[u8], from_fingerprint: &str) -> Result<(), String> {
+        let name_enc = crypto::encrypt_field(key.as_ref(), from_name.as_bytes())?;
+        let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0);
+        let conn = self.conn.lock().unwrap();
+        conn.execute("INSERT OR REPLACE INTO friend_requests(request_id, from_device_id, from_name, from_public_key, from_fingerprint, status, created_at) VALUES(?1, ?2, ?3, ?4, ?5, 'pending', ?6)", params![request_id, from_device_id, name_enc, from_public_key, from_fingerprint, ts]).map_err(|e| format!("db insert_fr: {e}"))?;
+        Ok(())
+    }
+
+    pub fn get_friend_requests(&self, key: &Zeroizing<[u8; 32]>) -> Result<Vec<serde_json::Value>, String> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT request_id, from_device_id, from_name, from_public_key, from_fingerprint, status FROM friend_requests WHERE status='pending' ORDER BY created_at DESC").map_err(|e| format!("db prepare: {e}"))?;
+        let rows = stmt.query_map([], |row| {
+            let name_enc: String = row.get(2)?;
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, name_enc, row.get::<_, Vec<u8>>(3)?, row.get::<_, String>(4)?, row.get::<_, String>(5)?))
+        }).map_err(|e| format!("db query: {e}"))?;
+        let mut results = Vec::new();
+        for r in rows {
+            let (rid, fdid, name_enc, pubkey, fp, status) = r.map_err(|e| format!("db row: {e}"))?;
+            let name_bytes = crypto::decrypt_field(key.as_ref(), &name_enc)?;
+            let display_name = String::from_utf8_lossy(&name_bytes).to_string();
+            let pubkey_b64 = base64::engine::general_purpose::STANDARD.encode(&pubkey);
+            results.push(serde_json::json!({ "request_id": rid, "from_device_id": fdid, "from_name": display_name, "from_public_key_b64": pubkey_b64, "from_fingerprint": fp, "status": status }));
+        }
+        Ok(results)
+    }
+
+    pub fn delete_friend_request(&self, request_id: &str) -> Result<(), String> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM friend_requests WHERE request_id=?1", params![request_id]).map_err(|e| format!("db delete_fr: {e}"))?;
         Ok(())
     }
 }

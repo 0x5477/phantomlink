@@ -16,7 +16,7 @@ use db::{ChatMessage, Conversation, Database, Device, FileRecord, Message};
 use network::DiscoveredPeer;
 use protocol::Frame;
 
-const APP_VERSION: &str = "1.2.0";
+const APP_VERSION: &str = "1.3.0";
 
 // ---- Vault lifecycle ----
 
@@ -329,13 +329,283 @@ fn delete_device(
 #[tauri::command]
 fn discover_peers(state: State<'_, Arc<AppStateData>>) -> Result<Vec<DiscoveredPeer>, String> {
     let network = state.network.clone();
-    state.runtime.block_on(async { network.discover_peers().await })
+    let our_id = state.db.meta_string("device_id").unwrap_or_default();
+    let peers = state.runtime.block_on(async { network.discover_peers().await })?;
+    Ok(peers.into_iter().filter(|p| p.device_id != our_id).collect())
 }
 
 /// Get list of connected peer device IDs.
 #[tauri::command]
 fn get_connected_peers(state: State<'_, Arc<AppStateData>>) -> Vec<String> {
     state.network.connected_peers()
+}
+
+// ---- Friend requests ----
+
+/// Send a friend request to a discovered peer by IP + port.
+#[tauri::command]
+fn send_friend_request(
+    ip: String,
+    port: Option<u16>,
+    display_name_hint: String,
+    state: State<'_, Arc<AppStateData>>,
+) -> Result<(), String> {
+    let db_key = state.app.get_db_key()?;
+    let port = port.unwrap_or(network::DEFAULT_PORT);
+    let our_id = state.db.meta_string("device_id").ok_or("no device id")?;
+    let our_name = match state.db.get_device_by_id(&db_key, &our_id) {
+        Ok(Some(d)) => d.display_name,
+        _ => display_name_hint,
+    };
+    let pubkey = state.db.meta("ed25519_public").unwrap_or_default();
+    let pubkey_b64 = base64::engine::general_purpose::STANDARD.encode(&pubkey);
+    let fingerprint = crypto::fingerprint_hex(&pubkey);
+
+    // Connect to peer
+    let network = state.network.clone();
+    let temp_id = format!("pending_{}", uuid::Uuid::new_v4());
+    state.runtime.block_on(async {
+        network.connect_to_peer(&ip, port, temp_id.clone()).await
+    })?;
+
+    // Send friend request frame
+    let frame = Frame::FriendRequest {
+        sender_id: our_id,
+        display_name: our_name,
+        public_key_b64: pubkey_b64,
+        fingerprint,
+    };
+    state.network.send_to_peer(&temp_id, protocol::encode_frame(&frame))?;
+    Ok(())
+}
+
+/// Accept a friend request: saves the requester as a device and sends a FriendResponse.
+#[tauri::command]
+fn accept_friend_request(
+    request_id: String,
+    from_device_id: String,
+    state: State<'_, Arc<AppStateData>>,
+) -> Result<(), String> {
+    let db_key = state.app.get_db_key()?;
+
+    // Get request details to build device record
+    let requests = state.db.get_friend_requests(&db_key)?;
+    let req = requests.iter().find(|r| r["request_id"] == request_id)
+        .ok_or("friend request not found")?;
+
+    let from_name = req["from_name"].as_str().unwrap_or("Unknown").to_string();
+    let from_pubkey_b64 = req["from_public_key_b64"].as_str().unwrap_or("").to_string();
+    let from_fp = req["from_fingerprint"].as_str().unwrap_or("").to_string();
+    let pubkey = base64::engine::general_purpose::STANDARD.decode(&from_pubkey_b64).unwrap_or_default();
+
+    // Save the device
+    let device = Device {
+        device_id: from_device_id.clone(),
+        display_name: from_name.clone(),
+        public_key_b64: from_pubkey_b64.clone(),
+        fingerprint: from_fp.clone(),
+        trusted: true,
+        last_seen: now_ms(),
+        ip: String::new(),
+        port: 0,
+    };
+    state.db.upsert_device(&db_key, &device, &pubkey)?;
+
+    // Send FriendResponse(accepted)
+    let our_id = state.db.meta_string("device_id").unwrap_or_default();
+    let our_pubkey = state.db.meta("ed25519_public").unwrap_or_default();
+    let our_pubkey_b64 = base64::engine::general_purpose::STANDARD.encode(&our_pubkey);
+    let our_fp = crypto::fingerprint_hex(&our_pubkey);
+    let our_name = state.db.get_device_by_id(&db_key, &our_id).ok().flatten().map(|d| d.display_name).unwrap_or_default();
+
+    let resp = Frame::FriendResponse {
+        responder_id: our_id,
+        requester_id: from_device_id.clone(),
+        accepted: true,
+        display_name: our_name,
+        public_key_b64: our_pubkey_b64,
+        fingerprint: our_fp,
+    };
+    let _ = state.network.send_to_peer(&from_device_id, protocol::encode_frame(&resp));
+
+    // Delete the friend request
+    state.db.delete_friend_request(&request_id)?;
+
+    let _ = app_handle_emit(&state, "friend-request-accepted", &serde_json::json!({"device_id": from_device_id}));
+    Ok(())
+}
+
+/// Reject a friend request.
+#[tauri::command]
+fn reject_friend_request(
+    request_id: String,
+    from_device_id: String,
+    state: State<'_, Arc<AppStateData>>,
+) -> Result<(), String> {
+    let our_id = state.db.meta_string("device_id").unwrap_or_default();
+    let resp = Frame::FriendResponse {
+        responder_id: our_id,
+        requester_id: from_device_id.clone(),
+        accepted: false,
+        display_name: String::new(),
+        public_key_b64: String::new(),
+        fingerprint: String::new(),
+    };
+    let _ = state.network.send_to_peer(&from_device_id, protocol::encode_frame(&resp));
+    state.db.delete_friend_request(&request_id)?;
+    Ok(())
+}
+
+/// Get all pending friend requests.
+#[tauri::command]
+fn get_friend_requests(state: State<'_, Arc<AppStateData>>) -> Result<Vec<serde_json::Value>, String> {
+    let db_key = state.app.get_db_key()?;
+    state.db.get_friend_requests(&db_key)
+}
+
+// ---- Profile ----
+
+/// Update profile (display name and/or avatar).
+#[tauri::command]
+fn update_profile(
+    display_name: Option<String>,
+    avatar_b64: Option<String>,
+    state: State<'_, Arc<AppStateData>>,
+) -> Result<(), String> {
+    let db_key = state.app.get_db_key()?;
+    let did = state.db.meta_string("device_id").ok_or("no device id")?;
+
+    if let Some(name) = &display_name {
+        state.db.update_device_name(&db_key, &did, name)?;
+    }
+    if let Some(avatar) = &avatar_b64 {
+        state.db.set_avatar(&did, avatar)?;
+    }
+
+    // Notify all connected peers about the name change
+    let our_id = did.clone();
+    let name = display_name.unwrap_or_default();
+    if !name.is_empty() {
+        let frame = Frame::ProfileUpdate { sender_id: our_id, display_name: name };
+        let encoded = protocol::encode_frame(&frame);
+        for peer_id in state.network.connected_peers() {
+            let _ = state.network.send_to_peer(&peer_id, encoded.clone());
+        }
+    }
+
+    Ok(())
+}
+
+/// Get avatar for a device.
+#[tauri::command]
+fn get_avatar(device_id: String, state: State<'_, Arc<AppStateData>>) -> Result<Option<String>, String> {
+    state.db.get_avatar(&device_id)
+}
+
+/// Send a voice data frame to a peer.
+#[tauri::command]
+fn send_voice_frame(
+    peer_device_id: String,
+    room_id: String,
+    sequence: i64,
+    audio_data: String,
+    sample_rate: i64,
+    channels: i64,
+    state: State<'_, Arc<AppStateData>>,
+) -> Result<(), String> {
+    let sender_id = state.db.meta_string("device_id").unwrap_or_default();
+    let frame = Frame::VoiceData {
+        sender_id,
+        room_id,
+        sequence,
+        audio_data,
+        sample_rate,
+        channels,
+    };
+    state.network.send_to_peer(&peer_device_id, protocol::encode_frame(&frame))
+}
+
+/// Send a voice call invite to a peer.
+#[tauri::command]
+fn send_voice_call_invite(
+    peer_device_id: String,
+    room_id: String,
+    call_type: String,
+    state: State<'_, Arc<AppStateData>>,
+) -> Result<(), String> {
+    let sender_id = state.db.meta_string("device_id").unwrap_or_default();
+    let db_key = state.app.get_db_key()?;
+    let sender_name = state.db.get_device_by_id(&db_key, &sender_id).ok().flatten().map(|d| d.display_name).unwrap_or_default();
+    let frame = Frame::VoiceCallInvite {
+        sender_id,
+        sender_name,
+        room_id,
+        call_type,
+    };
+    state.network.send_to_peer(&peer_device_id, protocol::encode_frame(&frame))
+}
+
+/// Send a voice call response to a peer.
+#[tauri::command]
+fn send_voice_call_response(
+    peer_device_id: String,
+    room_id: String,
+    accepted: bool,
+    state: State<'_, Arc<AppStateData>>,
+) -> Result<(), String> {
+    let responder_id = state.db.meta_string("device_id").unwrap_or_default();
+    let db_key = state.app.get_db_key()?;
+    let responder_name = state.db.get_device_by_id(&db_key, &responder_id).ok().flatten().map(|d| d.display_name).unwrap_or_default();
+    let frame = Frame::VoiceCallResponse {
+        responder_id,
+        responder_name,
+        room_id,
+        accepted,
+    };
+    state.network.send_to_peer(&peer_device_id, protocol::encode_frame(&frame))
+}
+
+/// Send a voice call end notification.
+#[tauri::command]
+fn send_voice_call_end(
+    peer_device_id: String,
+    room_id: String,
+    state: State<'_, Arc<AppStateData>>,
+) -> Result<(), String> {
+    let sender_id = state.db.meta_string("device_id").unwrap_or_default();
+    let frame = Frame::VoiceCallEnd { sender_id, room_id };
+    state.network.send_to_peer(&peer_device_id, protocol::encode_frame(&frame))
+}
+
+/// Send a sticker message frame.
+#[tauri::command]
+fn send_sticker_frame(
+    peer_device_id: String,
+    message_id: String,
+    sticker_id: String,
+    state: State<'_, Arc<AppStateData>>,
+) -> Result<(), String> {
+    let sender_id = state.db.meta_string("device_id").unwrap_or_default();
+    let frame = Frame::Message {
+        message_id,
+        sender_id,
+        recipient_id: peer_device_id.clone(),
+        sequence: 0,
+        timestamp: now_ms(),
+        msg_type: "sticker".to_string(),
+        encrypted_payload: base64::engine::general_purpose::STANDARD.encode(sticker_id.as_bytes()),
+        nonce: String::new(),
+        flags: vec![],
+        reply_to: None,
+    };
+    state.network.send_to_peer(&peer_device_id, protocol::encode_frame(&frame))
+}
+
+/// Helper: emit an event without requiring AppHandle in the function signature.
+fn app_handle_emit(_state: &Arc<AppStateData>, _event: &str, _payload: &serde_json::Value) -> Result<(), String> {
+    // Events are emitted via app_handle in the frame consumer.
+    // This is a no-op placeholder; real emission happens in frame consumer.
+    Ok(())
 }
 
 // ---- Conversations ----
@@ -939,10 +1209,85 @@ fn spawn_frame_consumer(
                     let _ = app_handle.emit("message-ack", serde_json::json!({ "message_id": message_id, "status": ack_type }));
                 }
 
-                Frame::Presence { sender_id, status } => {
-                    let _ = state.db.update_device_last_seen(&sender_id, now_ms());
-                    let _ = app_handle.emit("peer-presence", serde_json::json!({ "device_id": sender_id, "status": status }));
+               Frame::Presence { sender_id, status } => {
+                   let _ = state.db.update_device_last_seen(&sender_id, now_ms());
+                   let _ = app_handle.emit("peer-presence", serde_json::json!({ "device_id": sender_id, "status": status }));
+               }
+
+                Frame::FriendRequest { sender_id, display_name, public_key_b64, fingerprint } => {
+                    let db_key = match state.app.get_db_key() { Ok(k) => k, Err(_) => continue };
+                    // Check if already friends
+                    let existing = state.db.get_device_by_id(&db_key, &sender_id).ok().flatten();
+                    if existing.is_some() {
+                        // Already friends, auto-accept
+                        let our_id = state.db.meta_string("device_id").unwrap_or_default();
+                        let our_pubkey = state.db.meta("ed25519_public").unwrap_or_default();
+                        let our_pubkey_b64 = base64::engine::general_purpose::STANDARD.encode(&our_pubkey);
+                        let our_fp = crypto::fingerprint_hex(&our_pubkey);
+                        let resp = Frame::FriendResponse {
+                            responder_id: our_id, requester_id: sender_id.clone(), accepted: true,
+                            display_name: String::new(), public_key_b64: our_pubkey_b64, fingerprint: our_fp,
+                        };
+                        let _ = state.network.send_to_peer(&sender_id, protocol::encode_frame(&resp));
+                        continue;
+                    }
+                    // Store the friend request
+                    let request_id = uuid::Uuid::new_v4().to_string();
+                    let pubkey = base64::engine::general_purpose::STANDARD.decode(&public_key_b64).unwrap_or_default();
+                    let _ = state.db.insert_friend_request(&db_key, &request_id, &sender_id, &display_name, &pubkey, &fingerprint);
+                    // Register the connection alias so we can respond later
+                    state.network.register_alias(&sender_id, &source);
+                    let _ = app_handle.emit("friend-request-received", serde_json::json!({
+                        "request_id": request_id, "from_device_id": sender_id, "from_name": display_name, "fingerprint": fingerprint
+                    }));
                 }
+
+                Frame::FriendResponse { responder_id, accepted, display_name, public_key_b64, fingerprint, .. } => {
+                    if accepted {
+                        let db_key = match state.app.get_db_key() { Ok(k) => k, Err(_) => continue };
+                        let pubkey = base64::engine::general_purpose::STANDARD.decode(&public_key_b64).unwrap_or_default();
+                        let device = Device {
+                            device_id: responder_id.clone(), display_name: display_name.clone(),
+                            public_key_b64: public_key_b64.clone(), fingerprint: fingerprint.clone(),
+                            trusted: true, last_seen: now_ms(), ip: String::new(), port: 0,
+                        };
+                        let _ = state.db.upsert_device(&db_key, &device, &pubkey);
+                        let _ = app_handle.emit("device-added", &device);
+                        let _ = app_handle.emit("friend-request-accepted", serde_json::json!({ "device_id": responder_id }));
+                    } else {
+                        let _ = app_handle.emit("friend-request-rejected", serde_json::json!({ "device_id": responder_id }));
+                    }
+                }
+
+                Frame::VoiceCallInvite { sender_id, sender_name, room_id, call_type } => {
+                    let _ = app_handle.emit("voice-call-invite", serde_json::json!({
+                        "sender_id": sender_id, "sender_name": sender_name, "room_id": room_id, "call_type": call_type
+                    }));
+                }
+
+                Frame::VoiceCallResponse { responder_id, responder_name, room_id, accepted } => {
+                    let _ = app_handle.emit("voice-call-response", serde_json::json!({
+                        "responder_id": responder_id, "responder_name": responder_name, "room_id": room_id, "accepted": accepted
+                    }));
+                }
+
+                Frame::VoiceCallEnd { sender_id, room_id } => {
+                    let _ = app_handle.emit("voice-call-end", serde_json::json!({ "sender_id": sender_id, "room_id": room_id }));
+                }
+
+                Frame::VoiceData { sender_id, room_id, sequence, audio_data, sample_rate, channels } => {
+                    let _ = app_handle.emit("voice-data", serde_json::json!({
+                        "sender_id": sender_id, "room_id": room_id, "sequence": sequence,
+                        "audio_data": audio_data, "sample_rate": sample_rate, "channels": channels
+                    }));
+                }
+
+                Frame::ProfileUpdate { sender_id, display_name } => {
+                    let db_key = match state.app.get_db_key() { Ok(k) => k, Err(_) => continue };
+                    let _ = state.db.update_device_name(&db_key, &sender_id, &display_name);
+                    let _ = app_handle.emit("profile-update", serde_json::json!({ "device_id": sender_id, "display_name": display_name }));
+                }
+
                 _ => {}
             }
         }
@@ -1002,18 +1347,22 @@ pub fn run() {
             }
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![
-            vault_exists, create_vault, unlock_vault, lock_vault, is_unlocked, is_ui_locked,
-            get_device_id, get_device_name, get_device_info, get_app_version,
-            get_devices, get_local_ip, add_device, delete_device, discover_peers, get_connected_peers,
-            get_conversations, get_or_create_private_conversation, reset_unread,
-            get_messages, save_local_message, search_messages, update_message_status, burn_message, delete_message,
-            get_setting, set_setting, get_all_settings,
-            save_file_from_base64, load_file_to_base64,
-            start_network, stop_network, connect_to_peer, send_frame_to_peer, send_message_frame, send_file_frame,
-            export_backup, import_backup,
-            self_destruct,
-        ])
+       .invoke_handler(tauri::generate_handler![
+           vault_exists, create_vault, unlock_vault, lock_vault, is_unlocked, is_ui_locked,
+           get_device_id, get_device_name, get_device_info, get_app_version,
+           get_devices, get_local_ip, add_device, delete_device, discover_peers, get_connected_peers,
+           get_conversations, get_or_create_private_conversation, reset_unread,
+           get_messages, save_local_message, search_messages, update_message_status, burn_message, delete_message,
+           get_setting, set_setting, get_all_settings,
+           save_file_from_base64, load_file_to_base64,
+           start_network, stop_network, connect_to_peer, send_frame_to_peer, send_message_frame, send_file_frame,
+           export_backup, import_backup,
+           self_destruct,
+           send_friend_request, accept_friend_request, reject_friend_request, get_friend_requests,
+           update_profile, get_avatar,
+           send_voice_frame, send_voice_call_invite, send_voice_call_response, send_voice_call_end,
+           send_sticker_frame,
+       ])
         .run(tauri::generate_context!())
         .expect("error while running PhantomLink");
 }

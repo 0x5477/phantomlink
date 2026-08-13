@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { useStore } from "../../store";
 import { api } from "../../lib/tauri";
-import type { DiscoveredPeer } from "../../types";
-import { QrCode, RefreshCw, UserPlus, Trash2, Wifi, Loader2 } from "lucide-react";
+import type { DiscoveredPeer, FriendRequest } from "../../types";
+import { QrCode, RefreshCw, UserPlus, Trash2, Wifi, Loader2, UserCheck, X, Check } from "lucide-react";
 
 export default function DeviceList() {
   const devices = useStore((s) => s.devices);
@@ -10,12 +10,15 @@ export default function DeviceList() {
   const setActiveConvId = useStore((s) => s.setActiveConvId);
   const setNavSection = useStore((s) => s.setNavSection);
   const deviceId = useStore((s) => s.deviceId);
+  const friendRequests = useStore((s) => s.friendRequests);
+  const loadFriendRequests = useStore((s) => s.loadFriendRequests);
   const [showPair, setShowPair] = useState(false);
   const [pairInfo, setPairInfo] = useState<{ code: string; fp: string } | null>(null);
   const [showAdd, setShowAdd] = useState(false);
   const [peers, setPeers] = useState<DiscoveredPeer[]>([]);
   const [scanning, setScanning] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
+  const [pendingRequests, setPendingRequests] = useState<Record<string, boolean>>({});
 
   const handleStartChat = async (peerDeviceId: string) => {
     try {
@@ -26,17 +29,17 @@ export default function DeviceList() {
     } catch (e) { console.error(e); }
   };
 
-  // Add a discovered peer as a friend, then start chat
   const handleAddPeer = async (peer: DiscoveredPeer) => {
+    const key = peer.device_id;
+    setPendingRequests((p) => ({ ...p, [key]: true }));
     try {
-      await api.addDevice(peer.ip, peer.port, peer.display_name || "Unknown");
-      await loadDevices();
-      // Remove from discovered list
+      await api.sendFriendRequest(peer.ip, peer.port, peer.display_name || "Unknown");
       setPeers((prev) => prev.filter((p) => p.device_id !== peer.device_id));
     } catch (e) {
-      console.error("add peer:", e);
-      alert("添加失败: " + e);
+      console.error("send friend request:", e);
+      alert("发送好友请求失败: " + e);
     }
+    setPendingRequests((p) => { const n = { ...p }; delete n[key]; return n; });
   };
 
   const handleShowPair = async () => {
@@ -59,10 +62,24 @@ export default function DeviceList() {
     setScanning(true);
     try {
       const found = await api.discoverPeers();
-      const ownId = deviceId;
-      setPeers(found.filter((p) => p.device_id !== ownId));
+      setPeers(found);
     } catch (e) { console.error("discover:", e); }
     setScanning(false);
+  };
+
+  const handleAcceptFriend = async (req: FriendRequest) => {
+    try {
+      await api.acceptFriendRequest(req.request_id, req.from_device_id);
+      await loadFriendRequests();
+      await loadDevices();
+    } catch (e) { console.error(e); alert("接受好友请求失败: " + e); }
+  };
+
+  const handleRejectFriend = async (req: FriendRequest) => {
+    try {
+      await api.rejectFriendRequest(req.request_id, req.from_device_id);
+      await loadFriendRequests();
+    } catch (e) { console.error(e); }
   };
 
   const otherDevices = devices.filter((d) => d.device_id !== deviceId);
@@ -72,6 +89,9 @@ export default function DeviceList() {
       <div className="p-3 border-b border-white/5">
         <div className="flex items-center gap-2 mb-3">
           <h2 className="text-sm font-medium pl-text-cyan flex-1">联系人</h2>
+          {friendRequests.length > 0 && (
+            <span className="text-xs bg-orange-500/20 text-orange-400 px-1.5 rounded-full min-w-[18px] text-center">{friendRequests.length}</span>
+          )}
           <button onClick={handleScan} className="pl-btn-ghost rounded-lg p-1.5" title="扫描局域网">
             {scanning ? <Loader2 size={14} className="animate-spin" /> : <Wifi size={14} />}
           </button>
@@ -89,7 +109,33 @@ export default function DeviceList() {
       </div>
 
       <div className="flex-1 overflow-y-auto">
-        {otherDevices.length === 0 && peers.length === 0 ? (
+        {/* Friend requests */}
+        {friendRequests.length > 0 && (
+          <>
+            <div className="px-3 pt-2 pb-1">
+              <p className="text-xs text-orange-400 uppercase tracking-wide">好友申请 ({friendRequests.length})</p>
+            </div>
+            {friendRequests.map((req) => (
+              <div key={req.request_id} className="w-full text-left px-3 py-2.5 flex items-center gap-3 hover:bg-white/3 transition-colors border-b border-orange-400/10">
+                <div className="w-9 h-9 rounded-full pl-glass flex items-center justify-center text-xs text-orange-400 font-medium flex-shrink-0">
+                  {req.from_name.charAt(0).toUpperCase()}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <span className="text-sm truncate block">{req.from_name}</span>
+                  <p className="text-xs pl-text-dim font-mono truncate">{req.from_fingerprint.substring(0, 23) || "Unknown"}...</p>
+                </div>
+                <button onClick={() => handleAcceptFriend(req)} className="rounded-lg p-1.5 bg-green-500/15 border border-green-400/30 text-green-400 hover:bg-green-500/25" title="接受">
+                  <Check size={14} />
+                </button>
+                <button onClick={() => handleRejectFriend(req)} className="rounded-lg p-1.5 bg-red-500/15 border border-red-400/30 text-red-400 hover:bg-red-500/25" title="拒绝">
+                  <X size={14} />
+                </button>
+              </div>
+            ))}
+          </>
+        )}
+
+        {otherDevices.length === 0 && peers.length === 0 && friendRequests.length === 0 ? (
           <div className="p-4 text-center text-xs pl-text-dim">
             暂无联系人
             <br />
@@ -111,13 +157,17 @@ export default function DeviceList() {
                   <span className="text-sm truncate block">{peer.display_name}</span>
                   <p className="text-xs pl-text-dim font-mono truncate">{peer.ip}:{peer.port}</p>
                 </div>
-                <button onClick={() => handleAddPeer(peer)} className="pl-btn-ghost rounded-lg p-1.5" title="添加好友">
-                  <UserPlus size={14} className="pl-text-cyan" />
-                </button>
+                {pendingRequests[peer.device_id] ? (
+                  <Loader2 size={14} className="animate-spin pl-text-dim" />
+                ) : (
+                  <button onClick={() => handleAddPeer(peer)} className="pl-btn-ghost rounded-lg p-1.5" title="发送好友申请">
+                    <UserPlus size={14} className="pl-text-cyan" />
+                  </button>
+                )}
               </div>
             ))}
 
-            {otherDevices.length > 0 && peers.length > 0 && (
+            {otherDevices.length > 0 && (peers.length > 0 || friendRequests.length > 0) && (
               <div className="px-3 pt-2 pb-1">
                 <p className="text-xs pl-text-dim uppercase tracking-wide">已保存联系人</p>
               </div>
@@ -131,7 +181,7 @@ export default function DeviceList() {
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
                       <span className="text-sm truncate">{dev.display_name}</span>
-                      {dev.trusted && <span className="w-1.5 h-1.5 rounded-full bg-green-400 pl-glow-green" />}
+                      {dev.trusted && <UserCheck size={12} className="text-green-400" />}
                     </div>
                     <p className="text-xs pl-text-dim font-mono truncate">
                       {dev.fingerprint ? dev.fingerprint.substring(0, 23) + "..." : dev.ip || dev.device_id.substring(0, 12)}
@@ -147,7 +197,7 @@ export default function DeviceList() {
         )}
       </div>
 
-      {showAdd && <AddFriendModal onClose={() => setShowAdd(false)} onAdded={async () => { setShowAdd(false); await loadDevices(); }} />}
+      {showAdd && <AddFriendModal onClose={() => setShowAdd(false)} onAdded={async () => { setShowAdd(false); }} />}
       {deleteConfirm && (
         <div className="fixed inset-0 flex items-center justify-center z-50" style={{ background: "rgba(3, 6, 14, 0.8)" }} onClick={() => setDeleteConfirm(null)}>
           <div className="pl-glass-strong pl-glow-cyan rounded-2xl p-6 w-[320px]" onClick={(e) => e.stopPropagation()}>
@@ -169,7 +219,7 @@ export default function DeviceList() {
               <p className="text-xs pl-text-dim mb-1">设备指纹</p>
               <p className="text-xs font-mono pl-text-cyan break-all">{pairInfo.fp}</p>
             </div>
-            <p className="text-xs pl-text-dim text-center mt-4">在其他设备上输入此配对码或扫描局域网完成配对</p>
+            <p className="text-xs pl-text-dim text-center mt-4">在其他设备上发送好友申请完成配对</p>
             <button onClick={() => setShowPair(false)} className="pl-btn-ghost w-full py-2 rounded-lg mt-4 text-sm">关闭</button>
           </div>
         </div>
@@ -190,10 +240,10 @@ function AddFriendModal({ onClose, onAdded }: { onClose: () => void; onAdded: ()
     setLoading(true);
     setError("");
     try {
-      await api.addDevice(ip.trim(), parseInt(port) || 48443, name.trim());
+      await api.sendFriendRequest(ip.trim(), parseInt(port) || 48443, name.trim());
       onAdded();
     } catch (e: any) {
-      setError(typeof e === "string" ? e : "添加失败，请检查 IP 地址");
+      setError(typeof e === "string" ? e : "发送好友申请失败，请检查 IP 地址");
     }
     setLoading(false);
   };
@@ -216,12 +266,13 @@ function AddFriendModal({ onClose, onAdded }: { onClose: () => void; onAdded: ()
             <input className="pl-input w-full px-3 py-2 text-sm" placeholder="好友昵称" value={name} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && handleSubmit()} />
           </div>
         </div>
-        {error && <p className="text-xs text-red-400 mt-3 text-center">{error}</p>}
+        <p className="text-xs pl-text-dim mt-3">将向对方发送好友申请，对方同意后即可开始聊天</p>
+        {error && <p className="text-xs text-red-400 mt-2 text-center">{error}</p>}
         <div className="flex gap-2 mt-5">
           <button onClick={onClose} className="pl-btn-ghost flex-1 py-2 rounded-lg text-sm">取消</button>
           <button onClick={handleSubmit} disabled={loading} className="pl-btn-primary flex-1 py-2 rounded-lg text-sm flex items-center justify-center gap-2">
             {loading && <Loader2 size={14} className="animate-spin" />}
-            {loading ? "连接中..." : "添加"}
+            {loading ? "发送中..." : "发送申请"}
           </button>
         </div>
       </div>

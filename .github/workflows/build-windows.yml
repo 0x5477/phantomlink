@@ -59,10 +59,9 @@ jobs:
         shell: pwsh
         run: |
           if ($env:GITHUB_REF -match 'refs/tags/(.*)') {
-            Write-Host "TAG=$($Matches[1])" >> $env:GITHUB_OUTPUT
             echo "tag=$($Matches[1])" >> $env:GITHUB_OUTPUT
           } else {
-            echo "tag=v1.1" >> $env:GITHUB_OUTPUT
+            echo "tag=v1.3" >> $env:GITHUB_OUTPUT
           }
 
       - name: Upload MSI to release

@@ -40,7 +40,7 @@ export interface ChatMessage {
   conv_id: string;
   sender_id: string;
   direction: "sent" | "received";
-  msg_type: "text" | "image" | "file" | "emoji" | "system";
+  msg_type: "text" | "image" | "file" | "emoji" | "system" | "voice" | "sticker";
   content: string;
   timestamp: number;
   status: "pending" | "sent" | "delivered" | "read" | "failed";
@@ -86,4 +86,20 @@ export interface DiscoveredPeer {
   ip: string;
   port: number;
   fingerprint: string;
+}
+export interface FriendRequest {
+  request_id: string;
+  from_device_id: string;
+  from_name: string;
+  from_public_key_b64: string;
+  from_fingerprint: string;
+  status: string;
+}
+export interface VoiceCallState {
+  active: boolean;
+  roomId: string;
+  peerDeviceId: string;
+  peerName: string;
+  incoming: boolean;
+  accepted: boolean;
 }

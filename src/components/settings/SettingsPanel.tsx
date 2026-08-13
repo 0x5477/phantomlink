@@ -1,9 +1,9 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { useStore } from "../../store";
 import { api } from "../../lib/tauri";
 import {
   Shield, Clipboard, Database, Wifi, Lock, Info, Sun, Moon,
-  Skull, AlertTriangle, CheckCircle, Trash2,
+  Skull, AlertTriangle, CheckCircle, Trash2, User, Camera,
 } from "lucide-react";
 
 export default function SettingsPanel() {
@@ -13,11 +13,17 @@ export default function SettingsPanel() {
   const localIps = useStore((s) => s.localIps);
   const fingerprint = useStore((s) => s.fingerprint);
   const appVersion = useStore((s) => s.appVersion);
+  const deviceName = useStore((s) => s.deviceName);
   const [saved, setSaved] = useState(false);
   const [showSelfDestruct, setShowSelfDestruct] = useState(false);
   const [destructConfirm, setDestructConfirm] = useState("");
   const [destructing, setDestructing] = useState(false);
-  const [destructCountdown, setDestructCountdown] = useState<number | null>(null);
+
+  // Profile editing
+  const [editName, setEditName] = useState(deviceName || "");
+  const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
+  const [profileSaved, setProfileSaved] = useState(false);
+  const avatarInputRef = useRef<HTMLInputElement>(null);
 
   const updateSetting = async (key: string, value: string) => {
     await api.setSetting(key, value);
@@ -29,29 +35,41 @@ export default function SettingsPanel() {
   const handleSelfDestruct = async () => {
     if (destructConfirm !== "确认自毁") return;
     setDestructing(true);
-    setDestructCountdown(15);
+    try {
+      await api.selfDestruct();
+    } catch (e) {
+      console.error("self destruct:", e);
+    }
+    setTimeout(() => {
+      try { window.close(); } catch {}
+      try { window.location.reload(); } catch {}
+    }, 500);
+  };
 
-    // Countdown timer
-    const timer = setInterval(() => {
-      setDestructCountdown((prev) => {
-        if (prev === null || prev <= 1) {
-          clearInterval(timer);
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
+  const handleAvatarSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 2 * 1024 * 1024) { alert("头像不能超过2MB"); return; }
+   const reader = new FileReader();
+   reader.onload = () => {
+     const result = reader.result as string;
+     setAvatarPreview(result);
+   };
+    reader.readAsDataURL(file);
+    e.target.value = "";
+  };
 
-    // Wait 15 seconds then destroy
-    setTimeout(async () => {
-      try {
-        await api.selfDestruct();
-      } catch (e) {
-        console.error("self destruct:", e);
-      }
-      // Force close after destroy
-      setTimeout(() => window.close(), 500);
-    }, 15000);
+  const handleSaveProfile = async () => {
+    try {
+      await api.updateProfile(editName || null, avatarPreview ? avatarPreview.split(",")[1] : null);
+      useStore.setState({ deviceName: editName });
+      setProfileSaved(true);
+      setTimeout(() => setProfileSaved(false), 1500);
+      setAvatarPreview(null);
+    } catch (e) {
+      console.error("update profile:", e);
+      alert("保存失败: " + e);
+    }
   };
 
   return (
@@ -68,20 +86,37 @@ export default function SettingsPanel() {
         </div>
       )}
 
+      {/* Profile */}
+      <Section title="个人资料" icon={User}>
+        <div className="px-4 py-4">
+          <div className="flex items-center gap-4 mb-4">
+            <div className="w-16 h-16 rounded-full pl-glass pl-glow-cyan flex items-center justify-center text-xl pl-text-cyan font-medium overflow-hidden">
+              {avatarPreview ? <img src={avatarPreview} alt="avatar" className="w-full h-full object-cover" /> : (deviceName || "?").charAt(0).toUpperCase()}
+            </div>
+            <button onClick={() => avatarInputRef.current?.click()} className="pl-btn-ghost rounded-lg px-3 py-2 text-xs flex items-center gap-1.5">
+              <Camera size={14} /> 更换头像
+            </button>
+            <input ref={avatarInputRef} type="file" className="hidden" accept="image/png,image/jpeg" onChange={handleAvatarSelect} />
+          </div>
+          <div className="mb-3">
+            <label className="text-xs pl-text-dim block mb-1">昵称</label>
+            <input className="pl-input w-full px-3 py-2 text-sm" value={editName} onChange={(e) => setEditName(e.target.value)} placeholder="输入新昵称" />
+          </div>
+          {profileSaved && <p className="text-xs text-green-400 mb-2">资料已保存</p>}
+          <button onClick={handleSaveProfile} className="pl-btn-primary rounded-lg px-4 py-2 text-sm">保存资料</button>
+        </div>
+      </Section>
+
       {/* Appearance */}
       <Section title="外观" icon={settings.theme === "dark" ? Moon : Sun}>
         <Row label="主题模式" desc="切换日间/夜间主题">
           <div className="flex gap-1 pl-glass rounded-lg p-1">
-            <button
-              onClick={() => updateSetting("theme", "light")}
-              className={`px-3 py-1.5 rounded-md text-xs flex items-center gap-1.5 transition-all ${settings.theme === "light" ? "bg-cyan-500/20 pl-text-cyan" : "pl-text-dim"}`}
-            >
+            <button onClick={() => updateSetting("theme", "light")}
+              className={`px-3 py-1.5 rounded-md text-xs flex items-center gap-1.5 transition-all ${settings.theme === "light" ? "bg-cyan-500/20 pl-text-cyan" : "pl-text-dim"}`}>
               <Sun size={14} /> 日间
             </button>
-            <button
-              onClick={() => updateSetting("theme", "dark")}
-              className={`px-3 py-1.5 rounded-md text-xs flex items-center gap-1.5 transition-all ${settings.theme === "dark" ? "bg-cyan-500/20 pl-text-cyan" : "pl-text-dim"}`}
-            >
+            <button onClick={() => updateSetting("theme", "dark")}
+              className={`px-3 py-1.5 rounded-md text-xs flex items-center gap-1.5 transition-all ${settings.theme === "dark" ? "bg-cyan-500/20 pl-text-cyan" : "pl-text-dim"}`}>
               <Moon size={14} /> 夜间
             </button>
           </div>
@@ -108,16 +143,12 @@ export default function SettingsPanel() {
           <Toggle checked={settings.self_destruct_enabled} onChange={(v) => updateSetting("self_destruct_enabled", String(v))} />
         </Row>
         <div className="px-4 py-3 border-b border-white/3 last:border-0">
-          <button
-            onClick={() => setShowSelfDestruct(true)}
-            className="w-full py-2.5 rounded-lg text-sm bg-red-500/10 border border-red-400/30 text-red-400 flex items-center justify-center gap-2 hover:bg-red-500/20 transition-all"
-          >
+          <button onClick={() => setShowSelfDestruct(true)}
+            className="w-full py-2.5 rounded-lg text-sm bg-red-500/10 border border-red-400/30 text-red-400 flex items-center justify-center gap-2 hover:bg-red-500/20 transition-all">
             <Trash2 size={16} />
             立即自毁
           </button>
-          <p className="text-xs pl-text-dim mt-2 text-center">
-            点击后将启动15秒不可逆数据清除倒计时
-          </p>
+          <p className="text-xs pl-text-dim mt-2 text-center">点击后将立即不可逆清除所有加密数据</p>
         </div>
       </Section>
 
@@ -165,7 +196,7 @@ export default function SettingsPanel() {
       </Section>
 
       {/* About */}
-      <Section title="关于" icon={Info}>
+      <Section title="关于 PhantomLink" icon={Info}>
         <div className="px-4 py-4">
           <div className="flex items-center gap-3 mb-4">
             <div className="w-12 h-12 rounded-xl pl-glass pl-glow-cyan flex items-center justify-center">
@@ -179,7 +210,7 @@ export default function SettingsPanel() {
           <div className="space-y-2">
             <div className="flex justify-between text-xs">
               <span className="pl-text-dim">当前版本</span>
-              <span className="font-mono pl-text-cyan">v{appVersion || "1.2.0"}</span>
+              <span className="font-mono pl-text-cyan">v{appVersion || "1.3.0"}</span>
             </div>
             <div className="flex justify-between text-xs">
               <span className="pl-text-dim">加密方案</span>
@@ -191,17 +222,13 @@ export default function SettingsPanel() {
             </div>
           </div>
           <div className="flex gap-2 mt-4">
-            <button
-              onClick={() => alert(`当前版本: v${appVersion || "1.2.0"}\n请前往 GitHub Releases 检查最新版本`)}
-              className="pl-btn-ghost flex-1 py-2 rounded-lg text-xs flex items-center justify-center gap-1.5"
-            >
+            <button onClick={() => alert(`当前版本: v${appVersion || "1.3.0"}\n请前往 GitHub Releases 检查最新版本`)}
+              className="pl-btn-ghost flex-1 py-2 rounded-lg text-xs flex items-center justify-center gap-1.5">
               <AlertTriangle size={14} />
               检测更新
             </button>
-            <button
-              onClick={() => window.open("https://github.com/0x5477/phantomlink/releases", "_blank")}
-              className="pl-btn-ghost flex-1 py-2 rounded-lg text-xs flex items-center justify-center gap-1.5"
-            >
+            <button onClick={() => window.open("https://github.com/0x5477/phantomlink/releases", "_blank")}
+              className="pl-btn-ghost flex-1 py-2 rounded-lg text-xs flex items-center justify-center gap-1.5">
               <Database size={14} />
               立即更新
             </button>
@@ -209,19 +236,15 @@ export default function SettingsPanel() {
         </div>
       </Section>
 
-      {/* Self-destruct confirmation modal */}
+      {/* Self-destruct confirmation modal - IMMEDIATE, no countdown */}
       {showSelfDestruct && (
         <div className="fixed inset-0 flex items-center justify-center z-50" style={{ background: "rgba(60, 0, 0, 0.85)" }}>
           <div className="pl-glass-strong rounded-2xl p-8 w-[400px] pl-danger-pulse" style={{ borderColor: "rgba(255, 50, 80, 0.4)" }}>
             {destructing ? (
               <div className="text-center">
-                <h3 className="text-lg text-red-400 mb-2 font-bold">数据自毁进行中</h3>
-                <p className="text-5xl font-bold text-red-500 my-6">{destructCountdown}s</p>
-                <p className="text-xs pl-text-dim">所有加密数据正在被不可逆地清除...</p>
-                <div className="mt-4 w-full bg-red-500/10 rounded-full h-2 overflow-hidden">
-                  <div className="bg-red-500 h-full transition-all duration-1000"
-                    style={{ width: `${((15 - (destructCountdown || 0)) / 15) * 100}%` }} />
-                </div>
+                <h3 className="text-lg text-red-400 mb-4 font-bold">数据自毁完成</h3>
+                <CheckCircle size={48} className="text-red-400 mx-auto mb-4" />
+                <p className="text-xs pl-text-dim">所有加密数据已被不可逆地清除</p>
               </div>
             ) : (
               <>
@@ -230,33 +253,22 @@ export default function SettingsPanel() {
                   <h3 className="text-lg text-red-400 font-bold">确认自毁全部数据？</h3>
                 </div>
                 <p className="text-xs pl-text-dim mb-4">
-                  此操作将永久删除所有聊天记录、联系人、加密文件和密钥，无法恢复。
-                  启动后将进入15秒倒计时。
+                  此操作将永久删除所有聊天记录、联系人、加密文件和密钥，无法恢复。确认后将立即执行，无倒计时。
                 </p>
                 <div className="mb-4">
                   <label className="text-xs pl-text-dim block mb-1.5">
                     请输入 <span className="text-red-400 font-bold">确认自毁</span> 以继续：
                   </label>
-                  <input
-                    className="pl-input w-full px-3 py-2 text-sm"
-                    placeholder="确认自毁"
-                    value={destructConfirm}
+                  <input className="pl-input w-full px-3 py-2 text-sm" placeholder="确认自毁" value={destructConfirm}
                     onChange={(e) => setDestructConfirm(e.target.value)}
-                    style={{ borderColor: destructConfirm === "确认自毁" ? "rgba(0, 255, 148, 0.4)" : "rgba(255, 50, 80, 0.3)" }}
-                  />
+                    style={{ borderColor: destructConfirm === "确认自毁" ? "rgba(0, 255, 148, 0.4)" : "rgba(255, 50, 80, 0.3)" }} />
                 </div>
                 <div className="flex gap-2">
                   <button onClick={() => { setShowSelfDestruct(false); setDestructConfirm(""); }}
-                    className="pl-btn-ghost flex-1 py-2.5 rounded-lg text-sm">
-                    取消
-                  </button>
-                  <button
-                    onClick={handleSelfDestruct}
-                    disabled={destructConfirm !== "确认自毁"}
-                    className="flex-1 py-2.5 rounded-lg text-sm bg-red-500/20 border border-red-400/40 text-red-400 disabled:opacity-30 flex items-center justify-center gap-2"
-                  >
-                    <Skull size={14} />
-                    启动自毁
+                    className="pl-btn-ghost flex-1 py-2.5 rounded-lg text-sm">取消</button>
+                  <button onClick={handleSelfDestruct} disabled={destructConfirm !== "确认自毁"}
+                    className="flex-1 py-2.5 rounded-lg text-sm bg-red-500/20 border border-red-400/40 text-red-400 disabled:opacity-30 flex items-center justify-center gap-2">
+                    <Skull size={14} />立即自毁
                   </button>
                 </div>
               </>
@@ -283,10 +295,7 @@ function Section({ title, icon: Icon, children }: { title: string; icon: typeof 
 function Row({ label, desc, children }: { label: string; desc: string; children: React.ReactNode }) {
   return (
     <div className="flex items-center justify-between px-4 py-3 border-b border-white/3 last:border-0">
-      <div>
-        <p className="text-sm">{label}</p>
-        <p className="text-xs pl-text-dim">{desc}</p>
-      </div>
+      <div><p className="text-sm">{label}</p><p className="text-xs pl-text-dim">{desc}</p></div>
       {children}
     </div>
   );
@@ -294,10 +303,8 @@ function Row({ label, desc, children }: { label: string; desc: string; children:
 
 function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
   return (
-    <button
-      onClick={() => onChange(!checked)}
-      className={`w-11 h-6 rounded-full transition-all relative ${checked ? "bg-cyan-500/30 border border-cyan-400/40" : "bg-white/5 border border-white/10"}`}
-    >
+    <button onClick={() => onChange(!checked)}
+      className={`w-11 h-6 rounded-full transition-all relative ${checked ? "bg-cyan-500/30 border border-cyan-400/40" : "bg-white/5 border border-white/10"}`}>
       <span className={`absolute top-0.5 w-4 h-4 rounded-full transition-all ${checked ? "left-5 bg-cyan-400 pl-glow-cyan-sm" : "left-0.5 bg-gray-500"}`} />
     </button>
   );

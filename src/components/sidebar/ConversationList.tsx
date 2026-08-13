@@ -8,11 +8,14 @@ export default function ConversationList() {
   const conversations = useStore((s) => s.conversations);
   const activeConvId = useStore((s) => s.activeConvId);
   const setActiveConvId = useStore((s) => s.setActiveConvId);
+  const setNavSection = useStore((s) => s.setNavSection);
   const messages = useStore((s) => s.messages);
+  const devices = useStore((s) => s.devices);
+  const deviceId = useStore((s) => s.deviceId);
   const [query, setQuery] = useState("");
   const [searchResults, setSearchResults] = useState<ChatMessage[] | null>(null);
+  const [showNewConv, setShowNewConv] = useState(false);
 
-  // Debounced message content search
   useEffect(() => {
     if (!query.trim()) { setSearchResults(null); return; }
     const timer = setTimeout(async () => {
@@ -33,12 +36,24 @@ export default function ConversationList() {
     api.resetUnread(convId);
   };
 
+  const startNewConversation = async (peerDeviceId: string) => {
+    try {
+      const conv = await api.getOrCreatePrivateConversation(peerDeviceId);
+      await useStore.getState().loadConversations();
+      setActiveConvId(conv.conv_id);
+      setShowNewConv(false);
+      setNavSection("chats");
+    } catch (e) { console.error(e); }
+  };
+
+  const otherDevices = devices.filter((d) => d.device_id !== deviceId);
+
   return (
     <>
       <div className="p-3 border-b border-white/5">
         <div className="flex items-center gap-2 mb-3">
           <h2 className="text-sm font-medium pl-text-cyan flex-1">会话</h2>
-          <button className="pl-btn-ghost rounded-lg p-1.5" title="新建会话">
+          <button onClick={() => setShowNewConv(true)} className="pl-btn-ghost rounded-lg p-1.5" title="新建会话">
             <Plus size={16} />
           </button>
         </div>
@@ -54,7 +69,6 @@ export default function ConversationList() {
       </div>
 
       <div className="flex-1 overflow-y-auto">
-        {/* Message search results */}
         {searchResults && searchResults.length > 0 && (
           <div className="px-3 pt-2 pb-1">
             <p className="text-xs pl-text-dim uppercase tracking-wide">聊天记录匹配</p>
@@ -82,12 +96,11 @@ export default function ConversationList() {
           <div className="p-3 text-center text-xs pl-text-dim">未找到匹配的聊天记录</div>
         )}
 
-        {/* Conversation list */}
         {searchResults === null && (
           <>
             {filtered.length === 0 ? (
               <div className="p-4 text-center text-xs pl-text-dim">
-                {query ? "无匹配结果" : "暂无会话，去联系人页面发起聊天"}
+                {query ? "无匹配结果" : "暂无会话，点击右上角+发起聊天"}
               </div>
             ) : (
               filtered.map((conv) => {
@@ -115,7 +128,7 @@ export default function ConversationList() {
                         )}
                       </div>
                       <p className="text-xs pl-text-dim truncate">
-                        {lastMsg ? (lastMsg.msg_type === "file" ? `[文件] ${lastMsg.content}` : lastMsg.msg_type === "image" ? "[图片]" : lastMsg.content) : "暂无消息"}
+                        {lastMsg ? (lastMsg.msg_type === "file" ? `[文件] ${lastMsg.content}` : lastMsg.msg_type === "image" ? "[图片]" : lastMsg.msg_type === "voice" ? "[语音]" : lastMsg.msg_type === "sticker" ? "[表情包]" : lastMsg.content) : "暂无消息"}
                       </p>
                     </div>
                   </button>
@@ -125,6 +138,30 @@ export default function ConversationList() {
           </>
         )}
       </div>
+
+      {showNewConv && (
+        <div className="fixed inset-0 flex items-center justify-center z-50" style={{ background: "rgba(3, 6, 14, 0.8)" }} onClick={() => setShowNewConv(false)}>
+          <div className="pl-glass-strong pl-glow-cyan rounded-2xl p-6 w-[360px] max-h-[400px] flex flex-col" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-sm pl-text-cyan mb-4 flex items-center gap-2"><Plus size={16} />新建会话</h3>
+            <div className="flex-1 overflow-y-auto space-y-1">
+              {otherDevices.length === 0 ? (
+                <p className="text-xs pl-text-dim text-center py-4">暂无联系人，请先在联系人页面添加好友</p>
+              ) : (
+                otherDevices.map((dev) => (
+                  <button key={dev.device_id} onClick={() => startNewConversation(dev.device_id)}
+                    className="w-full text-left px-3 py-2.5 flex items-center gap-3 hover:bg-white/5 rounded-lg transition-colors">
+                    <div className="w-9 h-9 rounded-full pl-glass pl-glow-cyan-sm flex items-center justify-center text-xs pl-text-cyan font-medium">
+                      {dev.display_name.charAt(0).toUpperCase()}
+                    </div>
+                    <span className="text-sm">{dev.display_name}</span>
+                  </button>
+                ))
+              )}
+            </div>
+            <button onClick={() => setShowNewConv(false)} className="pl-btn-ghost w-full py-2 rounded-lg mt-3 text-sm">取消</button>
+          </div>
+        </div>
+      )}
     </>
   );
 }

@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   ChatMessage, Conversation, Device, DeviceInfo, NetworkInfo,
-  AppSettings, FileRecord, DiscoveredPeer,
+  AppSettings, FileRecord, DiscoveredPeer, FriendRequest,
 } from "../types";
 
 export const api = {
@@ -67,4 +67,25 @@ export const api = {
   importBackup: (password: string, srcPath: string) =>
     invoke<boolean>("import_backup", { password, srcPath }),
   selfDestruct: () => invoke<void>("self_destruct"),
+  // v1.3 additions
+  sendFriendRequest: (ip: string, port: number | null, displayNameHint: string) =>
+    invoke<void>("send_friend_request", { ip, port, displayNameHint }),
+  acceptFriendRequest: (requestId: string, fromDeviceId: string) =>
+    invoke<void>("accept_friend_request", { requestId, fromDeviceId }),
+  rejectFriendRequest: (requestId: string, fromDeviceId: string) =>
+    invoke<void>("reject_friend_request", { requestId, fromDeviceId }),
+  getFriendRequests: () => invoke<FriendRequest[]>("get_friend_requests"),
+  updateProfile: (displayName?: string | null, avatarB64?: string | null) =>
+    invoke<void>("update_profile", { displayName, avatarB64 }),
+  getAvatar: (deviceId: string) => invoke<string | null>("get_avatar", { deviceId }),
+  sendVoiceFrame: (peerDeviceId: string, roomId: string, sequence: number, audioData: string, sampleRate: number, channels: number) =>
+    invoke<void>("send_voice_frame", { peerDeviceId, roomId, sequence, audioData, sampleRate, channels }),
+  sendVoiceCallInvite: (peerDeviceId: string, roomId: string, callType: string) =>
+    invoke<void>("send_voice_call_invite", { peerDeviceId, roomId, callType }),
+  sendVoiceCallResponse: (peerDeviceId: string, roomId: string, accepted: boolean) =>
+    invoke<void>("send_voice_call_response", { peerDeviceId, roomId, accepted }),
+  sendVoiceCallEnd: (peerDeviceId: string, roomId: string) =>
+    invoke<void>("send_voice_call_end", { peerDeviceId, roomId }),
+  sendStickerFrame: (peerDeviceId: string, messageId: string, stickerId: string) =>
+    invoke<void>("send_sticker_frame", { peerDeviceId, messageId, stickerId }),
 };

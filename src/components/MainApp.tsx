@@ -6,6 +6,7 @@ import DeviceList from "./sidebar/DeviceList";
 import ChatWindow from "./chat/ChatWindow";
 import SettingsPanel from "./settings/SettingsPanel";
 import BackupPanel from "./backup/BackupPanel";
+import MaidPet from "./pet/MaidPet";
 
 export default function MainApp() {
   const navSection = useStore((s) => s.navSection);
@@ -42,15 +43,18 @@ export default function MainApp() {
   };
 
   return (
-    <div className="flex h-full">
-      <NavRail />
-      {showSidebar() && (
-        <div className="w-72 pl-glass border-r border-white/5 flex-shrink-0 flex flex-col">
-          {showSidebar()}
-        </div>
-      )}
-      <div className="flex-1 flex flex-col min-w-0">{showMain()}</div>
-    </div>
+    <>
+      <div className="flex h-full">
+        <NavRail />
+        {showSidebar() && (
+          <div className="w-72 pl-glass border-r border-white/5 flex-shrink-0 flex flex-col">
+            {showSidebar()}
+          </div>
+        )}
+        <div className="flex-1 flex flex-col min-w-0">{showMain()}</div>
+      </div>
+      <MaidPet />
+    </>
   );
 }
 
