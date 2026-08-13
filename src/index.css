@@ -1,0 +1,232 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Segoe UI Variable", "SF Pro Display", -apple-system,
+    BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei",
+    system-ui, sans-serif;
+  --font-mono: "SF Mono", "Cascadia Code", ui-monospace, SFMono-Regular,
+    Menlo, Consolas, monospace;
+}
+
+:root {
+  color-scheme: dark;
+  color: #E6EDF3;
+}
+
+html, body, #root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  overflow: hidden;
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  background: transparent;
+  user-select: none;
+}
+
+/* ===== Dark theme (default) ===== */
+:root,
+[data-theme="dark"] {
+  --pl-bg: #0A0E1A;
+  --pl-bg2: #0D1117;
+  --pl-bg3: #111827;
+  --pl-cyan: #00F5FF;
+  --pl-purple: #BF00FF;
+  --pl-green: #00FF94;
+  --pl-text: #E6EDF3;
+  --pl-text2: #7D8590;
+  --pl-border: rgba(0, 245, 255, 0.15);
+  --pl-border2: rgba(191, 0, 255, 0.15);
+  --pl-glass-bg: rgba(13, 17, 23, 0.55);
+  --pl-glass-strong: rgba(10, 14, 26, 0.82);
+  --pl-glass-purple-bg: rgba(191, 0, 255, 0.06);
+  --pl-input-bg: rgba(255, 255, 255, 0.04);
+  --pl-btn-ghost-bg: rgba(255, 255, 255, 0.03);
+  --pl-sent-bg: rgba(0, 245, 255, 0.10);
+  --pl-sent-border: rgba(0, 245, 255, 0.20);
+  --pl-recv-bg: rgba(191, 0, 255, 0.08);
+  --pl-recv-border: rgba(191, 0, 255, 0.15);
+  --pl-scrollbar: rgba(0, 245, 255, 0.15);
+  --pl-grid-line: rgba(0, 245, 255, 0.025);
+}
+
+/* ===== Light theme ===== */
+[data-theme="light"] {
+  --pl-bg: #F0F4FA;
+  --pl-bg2: #FFFFFF;
+  --pl-bg3: #E8EEF5;
+  --pl-cyan: #0099B8;
+  --pl-purple: #7B2CBF;
+  --pl-green: #00A86B;
+  --pl-text: #1A2332;
+  --pl-text2: #6B7C93;
+  --pl-border: rgba(0, 153, 184, 0.18);
+  --pl-border2: rgba(123, 44, 191, 0.15);
+  --pl-glass-bg: rgba(255, 255, 255, 0.72);
+  --pl-glass-strong: rgba(255, 255, 255, 0.92);
+  --pl-glass-purple-bg: rgba(123, 44, 191, 0.05);
+  --pl-input-bg: rgba(0, 0, 0, 0.03);
+  --pl-btn-ghost-bg: rgba(0, 0, 0, 0.04);
+  --pl-sent-bg: rgba(0, 153, 184, 0.08);
+  --pl-sent-border: rgba(0, 153, 184, 0.20);
+  --pl-recv-bg: rgba(123, 44, 191, 0.06);
+  --pl-recv-border: rgba(123, 44, 191, 0.15);
+  --pl-scrollbar: rgba(0, 153, 184, 0.20);
+  --pl-grid-line: rgba(0, 153, 184, 0.02);
+}
+
+/* ===== Deep space / light background ===== */
+.space-bg {
+  background: radial-gradient(ellipse at 30% 0%, var(--pl-bg2) 0%, var(--pl-bg) 60%);
+  position: relative;
+}
+
+.space-bg::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(var(--pl-grid-line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--pl-grid-line) 1px, transparent 1px);
+  background-size: 48px 48px;
+  pointer-events: none;
+}
+
+/* ===== Glass surfaces ===== */
+.pl-glass {
+  background: var(--pl-glass-bg);
+  border: 1px solid var(--pl-border);
+  backdrop-filter: blur(24px) saturate(140%);
+  -webkit-backdrop-filter: blur(24px) saturate(140%);
+}
+
+.pl-glass-strong {
+  background: var(--pl-glass-strong);
+  border: 1px solid var(--pl-border);
+  backdrop-filter: blur(40px) saturate(160%);
+  -webkit-backdrop-filter: blur(40px) saturate(160%);
+}
+
+.pl-glass-purple {
+  background: var(--pl-glass-purple-bg);
+  border: 1px solid var(--pl-border2);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+}
+
+/* ===== Neon glow ===== */
+.pl-glow-cyan { box-shadow: 0 0 20px rgba(0, 245, 255, 0.12), inset 0 1px 0 rgba(0, 245, 255, 0.08); }
+.pl-glow-purple { box-shadow: 0 0 20px rgba(191, 0, 255, 0.10), inset 0 1px 0 rgba(191, 0, 255, 0.06); }
+.pl-glow-green { box-shadow: 0 0 12px rgba(0, 255, 148, 0.20); }
+.pl-glow-cyan-sm { box-shadow: 0 0 8px rgba(0, 245, 255, 0.15); }
+
+/* ===== Neon text ===== */
+.pl-text-cyan { color: var(--pl-cyan); }
+.pl-text-purple { color: var(--pl-purple); }
+.pl-text-green { color: var(--pl-green); }
+.pl-text-dim { color: var(--pl-text2); }
+.pl-glow-text-cyan { color: var(--pl-cyan); text-shadow: 0 0 8px rgba(0, 245, 255, 0.5); }
+
+/* ===== Buttons ===== */
+.pl-btn-primary {
+  background: linear-gradient(135deg, color-mix(in srgb, var(--pl-cyan) 20%, transparent), color-mix(in srgb, var(--pl-cyan) 8%, transparent));
+  border: 1px solid color-mix(in srgb, var(--pl-cyan) 40%, transparent);
+  color: var(--pl-cyan);
+  transition: all 0.18s ease;
+}
+.pl-btn-primary:hover {
+  background: linear-gradient(135deg, color-mix(in srgb, var(--pl-cyan) 30%, transparent), color-mix(in srgb, var(--pl-cyan) 15%, transparent));
+  box-shadow: 0 0 16px color-mix(in srgb, var(--pl-cyan) 25%, transparent);
+}
+
+.pl-btn-purple {
+  background: linear-gradient(135deg, color-mix(in srgb, var(--pl-purple) 20%, transparent), color-mix(in srgb, var(--pl-purple) 8%, transparent));
+  border: 1px solid color-mix(in srgb, var(--pl-purple) 40%, transparent);
+  color: var(--pl-purple);
+  transition: all 0.18s ease;
+}
+.pl-btn-purple:hover {
+  background: linear-gradient(135deg, color-mix(in srgb, var(--pl-purple) 30%, transparent), color-mix(in srgb, var(--pl-purple) 15%, transparent));
+  box-shadow: 0 0 16px color-mix(in srgb, var(--pl-purple) 25%, transparent);
+}
+
+.pl-btn-ghost {
+  background: var(--pl-btn-ghost-bg);
+  border: 1px solid color-mix(in srgb, var(--pl-text2) 15%, transparent);
+  color: var(--pl-text2);
+  transition: all 0.15s ease;
+}
+.pl-btn-ghost:hover {
+  background: color-mix(in srgb, var(--pl-text2) 8%, transparent);
+  border-color: color-mix(in srgb, var(--pl-cyan) 20%, transparent);
+  color: var(--pl-text);
+}
+
+.pl-btn-danger {
+  background: rgba(255, 50, 80, 0.1);
+  border: 1px solid rgba(255, 50, 80, 0.3);
+  color: #FF6B7A;
+  transition: all 0.15s ease;
+}
+.pl-btn-danger:hover { background: rgba(255, 50, 80, 0.2); }
+
+/* ===== Inputs ===== */
+.pl-input {
+  background: var(--pl-input-bg);
+  border: 1px solid color-mix(in srgb, var(--pl-text2) 12%, transparent);
+  border-radius: 0.5rem;
+  color: var(--pl-text);
+  outline: none;
+  user-select: text;
+  transition: all 0.15s ease;
+}
+.pl-input::placeholder { color: var(--pl-text2); opacity: 0.6; }
+.pl-input:focus {
+  border-color: color-mix(in srgb, var(--pl-cyan) 40%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--pl-cyan) 10%, transparent);
+  background: color-mix(in srgb, var(--pl-cyan) 3%, transparent);
+}
+
+/* ===== Pulse animation ===== */
+@keyframes pl-pulse { 0%,100%{opacity:1;} 50%{opacity:0.4;} }
+.pl-pulse { animation: pl-pulse 2s ease-in-out infinite; }
+
+/* ===== Online indicator ===== */
+@keyframes pl-online-ring { 0%{box-shadow:0 0 0 0 rgba(0,255,148,0.5);} 70%{box-shadow:0 0 0 6px rgba(0,255,148,0);} 100%{box-shadow:0 0 0 0 rgba(0,255,148,0);} }
+.pl-online-dot { animation: pl-online-ring 2s ease-out infinite; }
+
+/* ===== Message slide-in ===== */
+@keyframes pl-slide-in-right { from{opacity:0;transform:translateX(12px) scale(0.97);} to{opacity:1;transform:none;} }
+@keyframes pl-slide-in-left { from{opacity:0;transform:translateX(-12px) scale(0.97);} to{opacity:1;transform:none;} }
+.pl-msg-sent { animation: pl-slide-in-right 0.3s cubic-bezier(0.22,1,0.36,1) both; }
+.pl-msg-received { animation: pl-slide-in-left 0.3s cubic-bezier(0.22,1,0.36,1) both; }
+
+/* ===== Fade in ===== */
+@keyframes pl-fade-in { from{opacity:0;transform:translateY(8px);} to{opacity:1;transform:none;} }
+.pl-fade-in { animation: pl-fade-in 0.25s ease both; }
+
+/* ===== Unlock wave ===== */
+@keyframes pl-unlock-wave { 0%{transform:scale(0.8);opacity:0.8;} 100%{transform:scale(2.5);opacity:0;} }
+.pl-unlock-wave { animation: pl-unlock-wave 0.8s ease-out forwards; }
+
+/* ===== Scan line effect ===== */
+@keyframes pl-scan { 0%{transform:translateY(-100%);} 100%{transform:translateY(100vh);} }
+.pl-scan-line { animation: pl-scan 4s linear infinite; }
+
+/* ===== Scrollbar ===== */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: var(--pl-scrollbar); border-radius: 6px; }
+::-webkit-scrollbar-thumb:hover { background: color-mix(in srgb, var(--pl-cyan) 30%, transparent); }
+::-webkit-scrollbar-track { background: transparent; }
+
+/* ===== Lock screen blur ===== */
+.pl-locked-blur { filter: blur(24px) brightness(0.3); transition: filter 0.4s ease; }
+
+/* ===== Emoji picker overrides ===== */
+emoji-picker-react { --num-columns: 8; --emoji-padding: 0.5rem; }
+
+/* ===== Self-destruct countdown ===== */
+@keyframes pl-danger-pulse { 0%,100%{box-shadow:0 0 20px rgba(255,50,80,0.3);} 50%{box-shadow:0 0 40px rgba(255,50,80,0.6);} }
+.pl-danger-pulse { animation: pl-danger-pulse 1s ease-in-out infinite; }

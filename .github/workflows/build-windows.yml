@@ -1,0 +1,90 @@
+name: Build Windows
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
+
+      - name: Install npm dependencies
+        run: npm install
+
+      - name: Build frontend
+        run: npx vite build
+
+      - name: Inject CSP
+        run: node scripts/inject-csp.mjs
+
+      - name: Build Tauri app (MSI + NSIS)
+        run: npx tauri build --target x86_64-pc-windows-msvc
+        env:
+          CI: false
+
+      - name: List build artifacts
+        shell: pwsh
+        run: |
+          Get-ChildItem -Path "src-tauri/target/x86_64-pc-windows-msvc/release/bundle" -Recurse -File | ForEach-Object { Write-Host $_.FullName }
+
+      - name: Determine release tag
+        id: tag
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF -match 'refs/tags/(.*)') {
+            Write-Host "TAG=$($Matches[1])" >> $env:GITHUB_OUTPUT
+            echo "tag=$($Matches[1])" >> $env:GITHUB_OUTPUT
+          } else {
+            echo "tag=v1.1" >> $env:GITHUB_OUTPUT
+          }
+
+      - name: Upload MSI to release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = "${{ steps.tag.outputs.tag }}"
+          $msi = Get-ChildItem -Path "src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi" -ErrorAction SilentlyContinue | Select-Object -First 1
+          $nsis = Get-ChildItem -Path "src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($msi) {
+            Write-Host "Uploading $($msi.FullName) to $tag"
+            gh release upload $tag $msi.FullName --clobber
+          }
+          if ($nsis) {
+            Write-Host "Uploading $($nsis.FullName) to $tag"
+            gh release upload $tag $nsis.FullName --clobber
+          }
+
+      - name: Upload artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-build-logs
+          path: src-tauri/target/x86_64-pc-windows-msvc/release/bundle/
