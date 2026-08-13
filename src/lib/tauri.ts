@@ -23,6 +23,7 @@ export const api = {
   deleteDevice: (deviceId: string) =>
     invoke<void>("delete_device", { deviceId }),
   discoverPeers: () => invoke<DiscoveredPeer[]>("discover_peers"),
+  routeScan: (networks: string[]) => invoke<DiscoveredPeer[]>("route_scan", { networks }),
   getConnectedPeers: () => invoke<string[]>("get_connected_peers"),
   getConversations: () => invoke<Conversation[]>("get_conversations"),
   getOrCreatePrivateConversation: (peerDeviceId: string) =>

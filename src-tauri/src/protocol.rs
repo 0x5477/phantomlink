@@ -186,6 +186,18 @@ pub enum Frame {
         audio_b64: String,
     },
 
+    /// Device identity probe used by route scanning across routed subnets.
+    /// The receiver replies with its own Hello (and does NOT auto-add contacts).
+    /// `reply=true` requests a Hello reply; replies carry `reply=false` so
+    /// peers never enter a reply loop.
+    #[serde(rename = "hello")]
+    Hello {
+        sender_id: String,
+        display_name: String,
+        fingerprint: String,
+        reply: bool,
+    },
+
     /// Profile update notification.
     #[serde(rename = "profile_update")]
     ProfileUpdate {

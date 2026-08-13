@@ -8,6 +8,7 @@ mod protocol;
 mod state;
 
 use std::collections::HashMap;
+use std::net::Ipv4Addr;
 use std::sync::{Arc, Mutex};
 use tauri::{Manager, State, Emitter};
 use base64::Engine as _;
@@ -17,7 +18,7 @@ use db::{ChatMessage, Conversation, Database, Device, FileRecord, Message};
 use network::DiscoveredPeer;
 use protocol::Frame;
 
-const APP_VERSION: &str = "1.4.2";
+const APP_VERSION: &str = "1.5.0";
 
 // ---- Vault lifecycle ----
 
@@ -419,6 +420,141 @@ fn discover_peers(state: State<'_, Arc<AppStateData>>) -> Result<Vec<DiscoveredP
     let our_id = state.db.meta_string("device_id").unwrap_or_default();
     let peers = state.runtime.block_on(async { network.discover_peers().await })?;
     Ok(peers.into_iter().filter(|p| p.device_id != our_id).collect())
+}
+
+/// Parse "a.b.c.d/prefix" into (network_base_u32, prefix_len).
+fn parse_cidr(s: &str) -> Option<(u32, u32)> {
+    let (ip_part, prefix_part) = s.trim().split_once('/')?;
+    let prefix: u32 = prefix_part.parse().ok()?;
+    if prefix > 30 {
+        return None;
+    }
+    let parts: Vec<u32> = ip_part
+        .split('.')
+        .map(|x| x.parse::<u32>().ok())
+        .collect::<Option<Vec<u32>>>()?;
+    if parts.len() != 4 {
+        return None;
+    }
+    let ip = (parts[0] << 24) | (parts[1] << 16) | (parts[2] << 8) | parts[3];
+    let mask = if prefix == 0 { 0 } else { u32::MAX << (32 - prefix) };
+    Some((ip & mask, prefix))
+}
+
+/// Route scan: probe every host in the given CIDR networks for a PhantomLink
+/// peer on the default port. Works across routed subnets (upstream router
+/// networks where mDNS broadcasts do not cross), because it dials each IP
+/// directly and performs a Hello handshake.
+#[tauri::command]
+fn route_scan(
+    networks: Vec<String>,
+    state: State<'_, Arc<AppStateData>>,
+) -> Result<Vec<DiscoveredPeer>, String> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpStream;
+
+    let our_id = state.db.meta_string("device_id").unwrap_or_default();
+    let db_key = state.app.get_db_key()?;
+    let our_name = state.db.get_device_by_id(&db_key, &our_id).ok().flatten().map(|d| d.display_name).unwrap_or_default();
+    let our_fp = state.db.meta("ed25519_public").map(|k| crypto::fingerprint_hex(&k)).unwrap_or_default();
+
+    let mut targets: Vec<Ipv4Addr> = Vec::new();
+    for net in &networks {
+        let Some((base, prefix)) = parse_cidr(net) else { continue };
+        let host_count = if prefix == 0 { 256 } else { 1u32 << (32 - prefix) };
+        let first = base + 1; // skip network address
+        let last = base + host_count.saturating_sub(2); // skip broadcast
+        let mut ip = first;
+        while ip <= last && ip < (base + host_count) {
+            let addr = Ipv4Addr::from(ip);
+            if network::is_private_ipv4(&addr) && !network::get_local_ipv4_addrs().contains(&addr.to_string()) {
+                targets.push(addr);
+            }
+            ip += 1;
+        }
+    }
+    if targets.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let port = state.network.port;
+    let self_id = our_id.clone();
+    let self_name = our_name.clone();
+    let self_fp = our_fp.clone();
+
+    let found = state.runtime.block_on(async move {
+        let sem = Arc::new(tokio::sync::Semaphore::new(128));
+        let mut handles = Vec::new();
+        for ip in targets {
+            let permit = match sem.clone().acquire_owned().await {
+                Ok(p) => p,
+                Err(_) => break,
+            };
+            let sid = self_id.clone();
+            let sname = self_name.clone();
+            let sfp = self_fp.clone();
+            handles.push(tokio::spawn(async move {
+                let _permit = permit;
+                probe_hello(ip, port, &sid, &sname, &sfp).await
+            }));
+        }
+        let mut out = Vec::new();
+        for h in handles {
+            if let Ok(Some(p)) = h.await {
+                if p.device_id != self_id {
+                    out.push(p);
+                }
+            }
+        }
+        out
+    });
+
+    Ok(found)
+}
+
+/// Connect to one host, perform the Hello handshake, return the peer info.
+async fn probe_hello(
+    ip: Ipv4Addr,
+    port: u16,
+    self_id: &str,
+    self_name: &str,
+    self_fp: &str,
+) -> Option<DiscoveredPeer> {
+    use std::net::{IpAddr, SocketAddr};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpStream;
+
+    let addr = SocketAddr::new(IpAddr::V4(ip), port);
+    let mut stream = tokio::time::timeout(std::time::Duration::from_millis(800), TcpStream::connect(addr)).await.ok()?.ok()?;
+
+    let hello = Frame::Hello {
+        sender_id: self_id.to_string(),
+        display_name: self_name.to_string(),
+        fingerprint: self_fp.to_string(),
+        reply: true,
+    };
+    let encoded = protocol::encode_frame(&hello);
+    tokio::time::timeout(std::time::Duration::from_millis(1000), stream.write_all(&encoded)).await.ok()?.ok()?;
+
+    let mut len_buf = [0u8; 4];
+    tokio::time::timeout(std::time::Duration::from_millis(2000), stream.read_exact(&mut len_buf)).await.ok()?.ok()?;
+    let len = u32::from_be_bytes(len_buf) as usize;
+    if len == 0 || len > 1024 * 1024 {
+        return None;
+    }
+    let mut buf = vec![0u8; len];
+    tokio::time::timeout(std::time::Duration::from_millis(2000), stream.read_exact(&mut buf)).await.ok()?.ok()?;
+    let frame = Frame::from_json(&String::from_utf8_lossy(&buf)).ok()?;
+    if let Frame::Hello { sender_id, display_name, fingerprint, .. } = frame {
+        return Some(DiscoveredPeer {
+            device_id: sender_id,
+            display_name,
+            ip: ip.to_string(),
+            port,
+            fingerprint,
+        });
+    }
+    None
 }
 
 /// Get list of connected peer device IDs.
@@ -1684,6 +1820,30 @@ fn spawn_frame_consumer(
                     let _ = app_handle.emit("message-received", serde_json::json!({ "conversation_id": conv.conv_id }));
                 }
 
+                Frame::Hello { sender_id, display_name, fingerprint, reply } => {
+                    // Identity probe from a route scan: reply once so the
+                    // scanner can learn who we are. Replies carry reply=false.
+                    if reply {
+                        if let Some(our_id) = state.db.meta_string("device_id") {
+                            if our_id != sender_id {
+                                let db_key = match state.app.get_db_key() { Ok(k) => k, Err(_) => continue };
+                                let our_name = state.db.get_device_by_id(&db_key, &our_id).ok().flatten().map(|d| d.display_name).unwrap_or_default();
+                                let our_fp = state.db.meta("ed25519_public").map(|k| crypto::fingerprint_hex(&k)).unwrap_or_default();
+                                let resp = Frame::Hello {
+                                    sender_id: our_id,
+                                    display_name: our_name,
+                                    fingerprint: our_fp,
+                                    reply: false,
+                                };
+                                let _ = state.network.send_to_peer(&sender_id, protocol::encode_frame(&resp));
+                            }
+                        }
+                    }
+                    let _ = app_handle.emit("peer-hello", serde_json::json!({
+                        "device_id": sender_id, "display_name": display_name, "fingerprint": fingerprint
+                    }));
+                }
+
                 Frame::ProfileUpdate { sender_id, display_name } => {
                     let db_key = match state.app.get_db_key() { Ok(k) => k, Err(_) => continue };
                     let _ = state.db.update_device_name(&db_key, &sender_id, &display_name);
@@ -1755,7 +1915,7 @@ pub fn run() {
        .invoke_handler(tauri::generate_handler![
            vault_exists, create_vault, unlock_vault, lock_vault, is_unlocked, is_ui_locked,
            get_device_id, get_device_name, get_device_info, get_app_version,
-           get_devices, get_local_ip, add_device, delete_device, discover_peers, get_connected_peers,
+           get_devices, get_local_ip, add_device, delete_device, discover_peers, route_scan, get_connected_peers,
            get_conversations, get_or_create_private_conversation, reset_unread,
            get_messages, save_local_message, search_messages, update_message_status, burn_message, delete_message,
            get_setting, set_setting, get_all_settings, save_downloaded_file, download_release_asset, check_latest_release,

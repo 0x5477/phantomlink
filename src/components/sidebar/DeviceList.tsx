@@ -2,8 +2,9 @@ import { useState } from "react";
 import { useStore } from "../../store";
 import { api } from "../../lib/tauri";
 import type { DiscoveredPeer, FriendRequest } from "../../types";
-import { QrCode, RefreshCw, UserPlus, Trash2, Wifi, Loader2, UserCheck, X, Check, Phone } from "lucide-react";
+import { QrCode, RefreshCw, UserPlus, Trash2, Wifi, Loader2, UserCheck, X, Check, Phone, Route } from "lucide-react";
 import type { VoiceCallTarget } from "../../types";
+import RouteScanModal from "./RouteScanModal";
 
 export default function DeviceList() {
   const devices = useStore((s) => s.devices);
@@ -23,6 +24,7 @@ export default function DeviceList() {
   const [pendingRequests, setPendingRequests] = useState<Record<string, boolean>>({});
   const [callSelecting, setCallSelecting] = useState(false);
   const [callSelected, setCallSelected] = useState<Set<string>>(new Set());
+  const [showRouteScan, setShowRouteScan] = useState(false);
 
   const handleStartChat = async (peerDeviceId: string) => {
     try {
@@ -125,6 +127,9 @@ export default function DeviceList() {
           )}
           <button onClick={handleScan} className="pl-btn-ghost rounded-lg p-1.5" title="扫描局域网">
             {scanning ? <Loader2 size={14} className="animate-spin" /> : <Wifi size={14} />}
+          </button>
+          <button onClick={() => setShowRouteScan(true)} className="pl-btn-ghost rounded-lg p-1.5" title="路由搜索（跨网段）">
+            <Route size={14} className="pl-text-cyan" />
           </button>
           <button onClick={() => setShowAdd(true)} className="pl-btn-ghost rounded-lg p-1.5" title="添加好友">
             <UserPlus size={14} />
@@ -256,6 +261,7 @@ export default function DeviceList() {
       </div>
 
       {showAdd && <AddFriendModal onClose={() => setShowAdd(false)} onAdded={async () => { setShowAdd(false); }} />}
+      {showRouteScan && <RouteScanModal onClose={() => setShowRouteScan(false)} />}
       {deleteConfirm && (
         <div className="fixed inset-0 flex items-center justify-center z-50" style={{ background: "rgba(3, 6, 14, 0.8)" }} onClick={() => setDeleteConfirm(null)}>
           <div className="pl-glass-strong pl-glow-cyan rounded-2xl p-6 w-[320px]" onClick={(e) => e.stopPropagation()}>

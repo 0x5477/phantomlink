@@ -4,7 +4,7 @@
 use get_if_addrs::get_if_addrs;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -50,6 +50,18 @@ pub fn is_lan_address(target: &IpAddr) -> bool {
             false
         }
         IpAddr::V6(_) => false,
+    }
+}
+
+/// True for RFC1918 private IPv4 addresses (allows scanning routed subnets
+/// that sit behind an upstream router but are still on our LAN).
+pub fn is_private_ipv4(ip: &Ipv4Addr) -> bool {
+    let octets = ip.octets();
+    match octets[0] {
+        10 => true,
+        172 => (16..=31).contains(&octets[1]),
+        192 => octets[1] == 168,
+        _ => false,
     }
 }
 

@@ -1,6 +1,6 @@
 [package]
 name = "phantomlink"
-version = "1.4.2"
+version = "1.5.0"
 description = "LAN Encrypted Chat"
 authors = ["you"]
 edition = "2021"
