@@ -7,6 +7,7 @@ mod network;
 mod protocol;
 mod state;
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tauri::{Manager, State, Emitter};
 use base64::Engine as _;
@@ -16,7 +17,7 @@ use db::{ChatMessage, Conversation, Database, Device, FileRecord, Message};
 use network::DiscoveredPeer;
 use protocol::Frame;
 
-const APP_VERSION: &str = "1.3.0";
+const APP_VERSION: &str = "1.4.0";
 
 // ---- Vault lifecycle ----
 
@@ -577,6 +578,95 @@ fn send_voice_call_end(
     state.network.send_to_peer(&peer_device_id, protocol::encode_frame(&frame))
 }
 
+/// Host creates an active call room locally (participants join via VoiceCallJoin).
+#[tauri::command]
+fn voice_call_start_room(
+    room_id: String,
+    state: State<'_, Arc<AppStateData>>,
+) -> Result<(), String> {
+    let sender_id = state.db.meta_string("device_id").unwrap_or_default();
+    let db_key = state.app.get_db_key()?;
+    let sender_name = state.db.get_device_by_id(&db_key, &sender_id).ok().flatten().map(|d| d.display_name).unwrap_or_default();
+    let mut rooms = state.call_rooms.lock().unwrap();
+    let room = rooms.entry(room_id.clone()).or_insert_with(|| CallRoom {
+        host_id: sender_id.clone(),
+        participants: HashMap::new(),
+    });
+    room.participants.insert(sender_id, sender_name);
+    Ok(())
+}
+
+/// Join an active call room as a participant (send join to the room host).
+#[tauri::command]
+fn voice_call_join(
+    host_device_id: String,
+    room_id: String,
+    state: State<'_, Arc<AppStateData>>,
+) -> Result<(), String> {
+    let sender_id = state.db.meta_string("device_id").unwrap_or_default();
+    let db_key = state.app.get_db_key()?;
+    let sender_name = state.db.get_device_by_id(&db_key, &sender_id).ok().flatten().map(|d| d.display_name).unwrap_or_default();
+    let frame = Frame::VoiceCallJoin { sender_id, sender_name, room_id };
+    state.network.send_to_peer(&host_device_id, protocol::encode_frame(&frame))
+}
+
+/// Leave an active call room (send leave to the room host).
+#[tauri::command]
+fn voice_call_leave(
+    host_device_id: String,
+    room_id: String,
+    state: State<'_, Arc<AppStateData>>,
+) -> Result<(), String> {
+    let sender_id = state.db.meta_string("device_id").unwrap_or_default();
+    let frame = Frame::VoiceCallLeave { sender_id, room_id };
+    state.network.send_to_peer(&host_device_id, protocol::encode_frame(&frame))
+}
+
+/// Host ends an entire call room: notify every participant and clear the room.
+#[tauri::command]
+fn voice_call_end_room(
+    room_id: String,
+    state: State<'_, Arc<AppStateData>>,
+) -> Result<(), String> {
+    let sender_id = state.db.meta_string("device_id").unwrap_or_default();
+    let frame = Frame::VoiceCallEnd { sender_id: sender_id.clone(), room_id: room_id.clone() };
+    let encoded = protocol::encode_frame(&frame);
+    let rooms = state.call_rooms.lock().unwrap();
+    if let Some(room) = rooms.get(&room_id) {
+        for pid in room.participants.keys() {
+            if pid != &sender_id {
+                let _ = state.network.send_to_peer(pid, encoded.clone());
+            }
+        }
+    }
+    drop(rooms);
+    state.call_rooms.lock().unwrap().remove(&room_id);
+    Ok(())
+}
+
+/// Send a dedicated voice message frame carrying encoded audio.
+#[tauri::command]
+fn send_voice_message_frame(
+    peer_device_id: String,
+    message_id: String,
+    duration_secs: i64,
+    mime: String,
+    audio_b64: String,
+    state: State<'_, Arc<AppStateData>>,
+) -> Result<(), String> {
+    let sender_id = state.db.meta_string("device_id").unwrap_or_default();
+    let frame = Frame::VoiceMessage {
+        message_id,
+        sender_id,
+        recipient_id: peer_device_id.clone(),
+        timestamp: now_ms(),
+        duration_secs,
+        mime,
+        audio_b64,
+    };
+    state.network.send_to_peer(&peer_device_id, protocol::encode_frame(&frame))
+}
+
 /// Send a sticker message frame.
 #[tauri::command]
 fn send_sticker_frame(
@@ -771,12 +861,20 @@ fn get_all_settings(state: State<'_, Arc<AppStateData>>) -> Result<serde_json::V
         "network_port": 48443,
         "self_destruct_enabled": false,
         "theme": "dark",
+        "pet_enabled": true,
+        "pet_x": "-1",
+        "pet_y": "-1",
     });
 
     let mut result = defaults;
     if let Some(obj) = result.as_object_mut() {
-        for key in ["lock_timeout_minutes", "clipboard_clear_seconds", "blur_on_focus_loss", "lock_on_sleep", "auto_backup_enabled", "auto_backup_interval_hours", "auto_backup_max", "burn_after_read_delay", "network_port", "self_destruct_enabled", "theme"] {
+        for key in ["lock_timeout_minutes", "clipboard_clear_seconds", "blur_on_focus_loss", "lock_on_sleep", "auto_backup_enabled", "auto_backup_interval_hours", "auto_backup_max", "burn_after_read_delay", "network_port", "self_destruct_enabled", "theme", "pet_enabled", "pet_x", "pet_y"] {
             if let Some(v) = state.db.meta_string(&format!("setting_{key}")) {
+                // String settings (theme) are stored as plain strings, not JSON.
+                if key == "theme" || key == "pet_x" || key == "pet_y" {
+                    if !v.is_empty() { obj.insert(key.to_string(), serde_json::json!(v)); }
+                    continue;
+                }
                 if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&v) {
                     obj.insert(key.to_string(), parsed);
                 }
@@ -1055,12 +1153,18 @@ fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
+pub struct CallRoom {
+    pub host_id: String,
+    pub participants: HashMap<String, String>, // device_id -> display_name
+}
+
 pub struct AppStateData {
     pub app: state::AppState,
     pub db: Database,
     pub file_store: file_store::FileStore,
     pub network: Arc<network::NetworkManager>,
     pub runtime: Arc<tokio::runtime::Runtime>,
+    pub call_rooms: Arc<Mutex<HashMap<String, CallRoom>>>,
 }
 
 trait DbMetaExt {
@@ -1275,11 +1379,155 @@ fn spawn_frame_consumer(
                     let _ = app_handle.emit("voice-call-end", serde_json::json!({ "sender_id": sender_id, "room_id": room_id }));
                 }
 
-                Frame::VoiceData { sender_id, room_id, sequence, audio_data, sample_rate, channels } => {
-                    let _ = app_handle.emit("voice-data", serde_json::json!({
-                        "sender_id": sender_id, "room_id": room_id, "sequence": sequence,
-                        "audio_data": audio_data, "sample_rate": sample_rate, "channels": channels
+                Frame::VoiceCallJoin { sender_id, sender_name, room_id } => {
+                    let local_id = state.db.meta_string("device_id").unwrap_or_default();
+                    let mut rooms = state.call_rooms.lock().unwrap();
+                    let room = rooms.entry(room_id.clone()).or_insert_with(|| CallRoom {
+                        host_id: local_id.clone(),
+                        participants: HashMap::new(),
+                    });
+                    room.participants.insert(sender_id.clone(), sender_name.clone());
+                    let participants: Vec<String> = room.participants.keys().cloned().collect();
+                    let names: Vec<String> = room.participants.values().cloned().collect();
+                    drop(rooms);
+                    // Sync the full participant list to everyone in the room.
+                    let sync = Frame::VoiceCallParticipants {
+                        room_id: room_id.clone(),
+                        participants: participants.clone(),
+                        names: names.clone(),
+                    };
+                    let encoded = protocol::encode_frame(&sync);
+                    for pid in &participants {
+                        if pid != &local_id {
+                            let _ = state.network.send_to_peer(pid, encoded.clone());
+                        }
+                    }
+                    let _ = app_handle.emit("voice-call-participants", serde_json::json!({
+                        "room_id": room_id, "participants": participants, "names": names
                     }));
+                }
+
+                Frame::VoiceCallLeave { sender_id, room_id } => {
+                    let mut rooms = state.call_rooms.lock().unwrap();
+                    let room_empty = {
+                        if let Some(room) = rooms.get_mut(&room_id) {
+                            room.participants.remove(&sender_id);
+                            let participants: Vec<String> = room.participants.keys().cloned().collect();
+                            let names: Vec<String> = room.participants.values().cloned().collect();
+                            let sync = Frame::VoiceCallParticipants {
+                                room_id: room_id.clone(),
+                                participants: participants.clone(),
+                                names: names.clone(),
+                            };
+                            let encoded = protocol::encode_frame(&sync);
+                            for pid in &participants {
+                                let _ = state.network.send_to_peer(pid, encoded.clone());
+                            }
+                            let _ = app_handle.emit("voice-call-participants", serde_json::json!({
+                                "room_id": room_id, "participants": participants, "names": names
+                            }));
+                            room.participants.is_empty()
+                        } else { false }
+                    };
+                    if room_empty { rooms.remove(&room_id); }
+                }
+
+                Frame::VoiceCallParticipants { room_id, participants, names } => {
+                    let _ = app_handle.emit("voice-call-participants", serde_json::json!({
+                        "room_id": room_id, "participants": participants, "names": names
+                    }));
+                }
+
+                Frame::VoiceData { sender_id, room_id, sequence, audio_data, sample_rate, channels } => {
+                    let local_id = state.db.meta_string("device_id").unwrap_or_default();
+                    // Host-relay: the room host receives voice data from every
+                    // participant and forwards it to all other members, while
+                    // emitting it locally for its own UI.
+                    let rooms = state.call_rooms.lock().unwrap();
+                    if let Some(room) = rooms.get(&room_id) {
+                        if sender_id != local_id {
+                            let _ = app_handle.emit("voice-data", serde_json::json!({
+                                "sender_id": sender_id.clone(), "room_id": room_id.clone(), "sequence": sequence,
+                                "audio_data": audio_data.clone(), "sample_rate": sample_rate, "channels": channels
+                            }));
+                        }
+                        let fwd = Frame::VoiceData {
+                            sender_id: sender_id.clone(),
+                            room_id: room_id.clone(),
+                            sequence,
+                            audio_data: audio_data.clone(),
+                            sample_rate,
+                            channels,
+                        };
+                        let encoded = protocol::encode_frame(&fwd);
+                        for pid in room.participants.keys() {
+                            if pid != &sender_id && pid != &local_id {
+                                let _ = state.network.send_to_peer(pid, encoded.clone());
+                            }
+                        }
+                    } else if sender_id != local_id {
+                        // Room not found on this device (e.g. participant receiving
+                        // direct audio): just play it locally.
+                        let _ = app_handle.emit("voice-data", serde_json::json!({
+                            "sender_id": sender_id.clone(), "room_id": room_id.clone(), "sequence": sequence,
+                            "audio_data": audio_data.clone(), "sample_rate": sample_rate, "channels": channels
+                        }));
+                    }
+                }
+
+                Frame::VoiceMessage { message_id, sender_id, timestamp, duration_secs, mime, audio_b64, .. } => {
+                    let db_key = match state.app.get_db_key() { Ok(k) => k, Err(_) => continue };
+                    let file_key = match state.app.get_file_key() { Ok(k) => k, Err(_) => continue };
+                    let audio = match base64::engine::general_purpose::STANDARD.decode(&audio_b64) {
+                        Ok(d) => d, Err(_) => continue,
+                    };
+                    let stored_name = match state.file_store.store(&file_key, &audio) {
+                        Ok(n) => n, Err(e) => { log::error!("store voice: {e}"); continue }
+                    };
+                    let new_file_id = uuid::Uuid::new_v4().to_string();
+                    let file_rec = FileRecord {
+                        file_id: new_file_id.clone(),
+                        message_id: message_id.clone(),
+                        original_name: format!("voice_{message_id}.wav"),
+                        stored_name,
+                        mime_type: mime.clone(),
+                        size: audio.len() as i64,
+                        sha256: file_store::FileStore::sha256_hex(&audio),
+                        is_image: false,
+                        width: None,
+                        height: None,
+                        created_at: now_ms(),
+                    };
+                    let _ = state.db.insert_file_record(&db_key, &file_rec);
+
+                    // Find or create the conversation, same as Frame::Message.
+                    let convs = match state.db.get_conversations(&db_key) { Ok(c) => c, Err(_) => continue };
+                    let conv = if let Some(existing) = convs.iter().find(|c| c.peer_device_id.as_deref() == Some(&sender_id)) {
+                        existing.clone()
+                    } else {
+                        let peer = state.db.get_device_by_id(&db_key, &sender_id).ok().flatten();
+                        let display_name = peer.map(|p| p.display_name).unwrap_or_else(|| sender_id[..8.min(sender_id.len())].to_string());
+                        let new_conv = Conversation {
+                            conv_id: uuid::Uuid::new_v4().to_string(), conv_type: "private".to_string(),
+                            peer_device_id: Some(sender_id.clone()), group_id: None,
+                            display_name, last_message_at: 0, unread_count: 0, pinned: false, muted: false,
+                        };
+                        let _ = state.db.upsert_conversation(&db_key, &new_conv);
+                        new_conv
+                    };
+
+                    let msg = Message {
+                        message_id: message_id.clone(), conv_id: conv.conv_id.clone(),
+                        sender_id: sender_id.clone(), direction: "received".to_string(),
+                        msg_type: "voice".to_string(), content: duration_secs.to_string(),
+                        timestamp: if timestamp > 0 { timestamp } else { now_ms() },
+                        sequence: 0, status: "delivered".to_string(),
+                        burn_after_read: false, burned: false,
+                        file_id: Some(new_file_id), reply_to: None,
+                    };
+                    let _ = state.db.insert_message(&db_key, &msg);
+                    let _ = state.network.send_to_peer(&sender_id, protocol::encode_frame(&Frame::Ack { message_id: message_id.clone(), ack_type: "delivered".to_string() }));
+                    let _ = app_handle.emit("message-received", serde_json::json!({ "conversation_id": conv.conv_id }));
                 }
 
                 Frame::ProfileUpdate { sender_id, display_name } => {
@@ -1309,7 +1557,10 @@ pub fn run() {
     let app_state = state::AppState::new(data_dir, device_id.clone());
     if db.get_meta("kdf_salt").ok().flatten().is_some() { app_state.set_initialized(true); }
 
-    let state_data = Arc::new(AppStateData { app: app_state, db, file_store, network, runtime });
+    let state_data = Arc::new(AppStateData {
+        app: app_state, db, file_store, network, runtime,
+        call_rooms: Arc::new(Mutex::new(HashMap::new())),
+    });
 
     let nm = state_data.network.clone();
     let port = state_data.network.port;
@@ -1361,7 +1612,8 @@ pub fn run() {
            send_friend_request, accept_friend_request, reject_friend_request, get_friend_requests,
            update_profile, get_avatar,
            send_voice_frame, send_voice_call_invite, send_voice_call_response, send_voice_call_end,
-           send_sticker_frame,
+           voice_call_start_room, voice_call_join, voice_call_leave, voice_call_end_room,
+           send_voice_message_frame, send_sticker_frame,
        ])
         .run(tauri::generate_context!())
         .expect("error while running PhantomLink");

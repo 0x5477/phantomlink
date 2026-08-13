@@ -2,7 +2,8 @@ import { useState } from "react";
 import { useStore } from "../../store";
 import { api } from "../../lib/tauri";
 import type { DiscoveredPeer, FriendRequest } from "../../types";
-import { QrCode, RefreshCw, UserPlus, Trash2, Wifi, Loader2, UserCheck, X, Check } from "lucide-react";
+import { QrCode, RefreshCw, UserPlus, Trash2, Wifi, Loader2, UserCheck, X, Check, Phone } from "lucide-react";
+import type { VoiceCallTarget } from "../../types";
 
 export default function DeviceList() {
   const devices = useStore((s) => s.devices);
@@ -12,6 +13,7 @@ export default function DeviceList() {
   const deviceId = useStore((s) => s.deviceId);
   const friendRequests = useStore((s) => s.friendRequests);
   const loadFriendRequests = useStore((s) => s.loadFriendRequests);
+  const setVoiceCall = useStore((s) => s.setVoiceCall);
   const [showPair, setShowPair] = useState(false);
   const [pairInfo, setPairInfo] = useState<{ code: string; fp: string } | null>(null);
   const [showAdd, setShowAdd] = useState(false);
@@ -19,6 +21,8 @@ export default function DeviceList() {
   const [scanning, setScanning] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
   const [pendingRequests, setPendingRequests] = useState<Record<string, boolean>>({});
+  const [callSelecting, setCallSelecting] = useState(false);
+  const [callSelected, setCallSelected] = useState<Set<string>>(new Set());
 
   const handleStartChat = async (peerDeviceId: string) => {
     try {
@@ -67,6 +71,33 @@ export default function DeviceList() {
     setScanning(false);
   };
 
+  const toggleCallSelect = (dev: { device_id: string; display_name: string }) => {
+    setCallSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(dev.device_id)) next.delete(dev.device_id);
+      else next.add(dev.device_id);
+      return next;
+    });
+  };
+
+  const startGroupCall = async () => {
+    if (callSelected.size === 0) return;
+    const targets: VoiceCallTarget[] = otherDevices
+      .filter((d) => callSelected.has(d.device_id))
+      .map((d) => ({ device_id: d.device_id, name: d.display_name }));
+    const roomId = `call_${Date.now()}`;
+    setVoiceCall({
+      active: true, roomId,
+      peerId: targets[0].device_id, peerName: targets[0].name,
+      incoming: false, hostId: deviceId,
+      participants: [{ device_id: deviceId || "", name: "" }],
+      targets,
+    });
+    setCallSelecting(false);
+    setCallSelected(new Set());
+    setNavSection("chats");
+  };
+
   const handleAcceptFriend = async (req: FriendRequest) => {
     try {
       await api.acceptFriendRequest(req.request_id, req.from_device_id);
@@ -98,6 +129,9 @@ export default function DeviceList() {
           <button onClick={() => setShowAdd(true)} className="pl-btn-ghost rounded-lg p-1.5" title="添加好友">
             <UserPlus size={14} />
           </button>
+          <button onClick={() => { setCallSelecting((v) => !v); setCallSelected(new Set()); }} className={`pl-btn-ghost rounded-lg p-1.5 ${callSelecting ? "text-cyan-400 border-cyan-400/40" : ""}`} title="群通话">
+            <Phone size={14} />
+          </button>
           <button onClick={loadDevices} className="pl-btn-ghost rounded-lg p-1.5" title="刷新">
             <RefreshCw size={14} />
           </button>
@@ -107,6 +141,18 @@ export default function DeviceList() {
           显示配对码
         </button>
       </div>
+
+      {callSelecting && (
+        <div className="px-3 py-2 border-b border-white/5 pl-glass">
+          <div className="flex items-center gap-2">
+            <Phone size={13} className="pl-text-cyan" />
+            <span className="text-xs pl-text-dim flex-1">选择联系人发起群通话（{callSelected.size} 人）</span>
+            <button onClick={startGroupCall} disabled={callSelected.size === 0} className="pl-btn-primary rounded-lg px-3 py-1.5 text-xs disabled:opacity-30">
+              开始通话
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="flex-1 overflow-y-auto">
         {/* Friend requests */}
@@ -172,27 +218,39 @@ export default function DeviceList() {
                 <p className="text-xs pl-text-dim uppercase tracking-wide">已保存联系人</p>
               </div>
             )}
-            {otherDevices.map((dev) => (
-              <div key={dev.device_id} className="group w-full text-left px-3 py-3 flex items-center gap-3 hover:bg-white/3 transition-colors border-b border-white/3">
-                <button onClick={() => handleStartChat(dev.device_id)} className="flex items-center gap-3 flex-1 min-w-0">
-                  <div className="w-10 h-10 rounded-full pl-glass pl-glow-cyan-sm flex items-center justify-center text-sm pl-text-cyan font-medium">
-                    {dev.display_name.charAt(0).toUpperCase()}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm truncate">{dev.display_name}</span>
-                      {dev.trusted && <UserCheck size={12} className="text-green-400" />}
+            {otherDevices.map((dev) => {
+              const isSel = callSelected.has(dev.device_id);
+              return (
+                <div key={dev.device_id} className={`group w-full text-left px-3 py-3 flex items-center gap-3 transition-colors border-b border-white/3 ${isSel ? "bg-cyan-500/10" : "hover:bg-white/3"}`}>
+                  <button
+                    onClick={() => callSelecting ? toggleCallSelect(dev) : handleStartChat(dev.device_id)}
+                    className="flex items-center gap-3 flex-1 min-w-0"
+                  >
+                    <div className="w-10 h-10 rounded-full pl-glass pl-glow-cyan-sm flex items-center justify-center text-sm pl-text-cyan font-medium">
+                      {dev.display_name.charAt(0).toUpperCase()}
                     </div>
-                    <p className="text-xs pl-text-dim font-mono truncate">
-                      {dev.fingerprint ? dev.fingerprint.substring(0, 23) + "..." : dev.ip || dev.device_id.substring(0, 12)}
-                    </p>
-                  </div>
-                </button>
-                <button onClick={() => setDeleteConfirm(dev.device_id)} className="pl-btn-ghost rounded p-1.5 opacity-0 group-hover:opacity-100 transition-opacity" title="删除联系人">
-                  <Trash2 size={13} className="text-red-400/70" />
-                </button>
-              </div>
-            ))}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm truncate">{dev.display_name}</span>
+                        {dev.trusted && <UserCheck size={12} className="text-green-400" />}
+                      </div>
+                      <p className="text-xs pl-text-dim font-mono truncate">
+                        {dev.fingerprint ? dev.fingerprint.substring(0, 23) + "..." : dev.ip || dev.device_id.substring(0, 12)}
+                      </p>
+                    </div>
+                  </button>
+                  {callSelecting ? (
+                    <button onClick={() => toggleCallSelect(dev)} className={`w-5 h-5 rounded-full border flex items-center justify-center text-[10px] ${isSel ? "bg-cyan-500/30 border-cyan-400 text-cyan-400" : "border-white/20 pl-text-dim"}`}>
+                      {isSel ? "✓" : ""}
+                    </button>
+                  ) : (
+                    <button onClick={() => setDeleteConfirm(dev.device_id)} className="pl-btn-ghost rounded p-1.5 opacity-0 group-hover:opacity-100 transition-opacity" title="删除联系人">
+                      <Trash2 size={13} className="text-red-400/70" />
+                    </button>
+                  )}
+                </div>
+              );
+            })}
           </>
         )}
       </div>

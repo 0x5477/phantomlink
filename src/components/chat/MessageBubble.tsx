@@ -3,6 +3,7 @@ import { Flame, Lock, Check, CheckCheck, Clock, AlertCircle, Play, Pause } from 
 import type { ChatMessage } from "../../types";
 import { useStore } from "../../store";
 import { api } from "../../lib/tauri";
+import { decodeWav } from "../../lib/audio";
 
 export default function MessageBubble({
   msg,
@@ -17,9 +18,12 @@ export default function MessageBubble({
   const settings = useStore((s) => s.settings);
   const [burnCountdown, setBurnCountdown] = useState<number | null>(null);
   const [imageData, setImageData] = useState<string | null>(null);
-  const [voiceData, setVoiceData] = useState<string | null>(null);
+  const [voiceBytes, setVoiceBytes] = useState<Uint8Array | null>(null);
+  const [voiceUrl, setVoiceUrl] = useState<string | null>(null);
   const [voicePlaying, setVoicePlaying] = useState(false);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const legacyAudioRef = useRef<HTMLAudioElement | null>(null);
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const playingSourceRef = useRef<AudioBufferSourceNode | null>(null);
 
   useEffect(() => {
     if (msg.burn_after_read && msg.direction === "received") {
@@ -48,21 +52,62 @@ export default function MessageBubble({
     }
     if (msg.msg_type === "voice" && msg.file_info) {
       api.loadFileToBase64(msg.file_info.stored_name).then((b64) => {
-        setVoiceData(`data:${msg.file_info!.mime_type};base64,${b64}`);
+        const bin = atob(b64);
+        const bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        setVoiceBytes(bytes);
+        setVoiceUrl(`data:${msg.file_info!.mime_type};base64,${b64}`);
       }).catch(() => {});
     }
   }, [msg.msg_type, msg.file_info]);
 
   const toggleVoicePlay = () => {
-    if (!audioRef.current || !voiceData) return;
     if (voicePlaying) {
-      audioRef.current.pause();
+      try { playingSourceRef.current?.stop(); } catch {}
+      playingSourceRef.current = null;
+      if (legacyAudioRef.current) { legacyAudioRef.current.pause(); }
       setVoicePlaying(false);
+      return;
+    }
+    // Try WAV decode (v1.4 recordings). Fall back to <audio> for legacy webm.
+    if (voiceBytes) {
+      try {
+        if (!audioCtxRef.current) audioCtxRef.current = new AudioContext();
+        const ctx = audioCtxRef.current;
+        if (ctx.state === "suspended") void ctx.resume();
+        const wav = decodeWav(voiceBytes.buffer.slice(voiceBytes.byteOffset, voiceBytes.byteOffset + voiceBytes.byteLength));
+        const buffer = ctx.createBuffer(wav.channels, wav.samples.length / wav.channels, wav.sampleRate);
+        buffer.copyToChannel(wav.samples, 0);
+        const src = ctx.createBufferSource();
+        src.buffer = buffer;
+        src.connect(ctx.destination);
+        src.onended = () => {
+          playingSourceRef.current = null;
+          setVoicePlaying(false);
+        };
+        playingSourceRef.current = src;
+        src.start();
+        setVoicePlaying(true);
+        return;
+      } catch (e) {
+        console.warn("wav decode failed, falling back to audio element:", e);
+      }
+    }
+    if (voiceUrl && legacyAudioRef.current) {
+      legacyAudioRef.current.play().then(() => setVoicePlaying(true)).catch((e) => console.error("voice play:", e));
     } else {
-      audioRef.current.play();
-      setVoicePlaying(true);
+      alert("无法播放该语音消息");
     }
   };
+
+  // Stop playback when the bubble unmounts
+  useEffect(() => {
+    return () => {
+      try { playingSourceRef.current?.stop(); } catch {}
+      try { legacyAudioRef.current?.pause(); } catch {}
+      try { if (audioCtxRef.current && audioCtxRef.current.state !== "closed") void audioCtxRef.current.close(); } catch {}
+    };
+  }, []);
 
   const time = new Date(msg.timestamp).toLocaleTimeString("zh-CN", {
     hour: "2-digit",
@@ -126,7 +171,7 @@ export default function MessageBubble({
               ))}
             </div>
             <span className="text-xs pl-text-dim">{duration}"</span>
-            {voiceData && <audio ref={audioRef} src={voiceData} onEnded={() => setVoicePlaying(false)} className="hidden" />}
+            {voiceUrl && <audio ref={legacyAudioRef} src={voiceUrl} onEnded={() => setVoicePlaying(false)} className="hidden" />}
           </div>
           <div className={`flex items-center gap-1 mt-1 ${isSelf ? "justify-end" : ""}`}>
             {msg.burn_after_read && <Flame size={10} className="text-orange-400/60" />}

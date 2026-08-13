@@ -3,6 +3,7 @@ import EmojiPicker, { EmojiStyle, Theme } from "emoji-picker-react";
 import { Send, Paperclip, Smile, Flame, X, Camera, Mic, Sticker } from "lucide-react";
 import { useStore } from "../../store";
 import { api } from "../../lib/tauri";
+import { startVoiceRecorder, type VoiceRecorder } from "../../lib/audio";
 
 const MAX_FILE_SIZE = 500 * 1024 * 1024;
 
@@ -29,10 +30,9 @@ export default function InputBar({ convId }: { convId: string }) {
   const conversations = useStore((s) => s.conversations);
   const settings = useStore((s) => s.settings);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const audioChunksRef = useRef<Blob[]>([]);
+  const recorderRef = useRef<VoiceRecorder | null>(null);
   const recordTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const streamRef = useRef<MediaStream | null>(null);
+  const recordStartRef = useRef(0);
 
   const conv = conversations.find((c) => c.conv_id === convId);
   const peerDeviceId = conv?.peer_device_id ?? null;
@@ -147,62 +147,55 @@ export default function InputBar({ convId }: { convId: string }) {
     setSending(false);
   };
 
-  // Voice message recording
+  // Voice message recording (WAV via ScriptProcessor; plays everywhere incl. WKWebView)
   const startRecording = async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      streamRef.current = stream;
-      audioChunksRef.current = [];
-      const recorder = new MediaRecorder(stream);
-      recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) audioChunksRef.current.push(e.data);
-      };
-      recorder.onstop = async () => {
-        const blob = new Blob(audioChunksRef.current, { type: "audio/webm" });
-        const reader = new FileReader();
-        reader.onload = async () => {
-          const result = reader.result as string;
-          const b64 = result.split(",")[1];
-          const duration = recordTime;
-          try {
-            const fileRec = await api.saveFileFromBase64(`voice_${Date.now()}.webm`, "audio/webm", b64);
-            const msg = await api.saveLocalMessage(convId, "voice", `${duration}`, "sent", false, fileRec.file_id);
-            appendMessage(convId, msg);
-            if (peerDeviceId) {
-              try {
-                await api.sendMessageFrame(peerDeviceId, msg.message_id, "voice", `${duration}`, false);
-                await api.sendFileFrame(peerDeviceId, msg.message_id, fileRec.file_id);
-                updateMessageInStore(convId, msg.message_id, { status: "sent" });
-              } catch (e) { console.error("voice send failed:", e); }
-            }
-          } catch (e) { console.error(e); }
-        };
-        reader.readAsDataURL(blob);
-        stream.getTracks().forEach((t) => t.stop());
-      };
-      recorder.start();
-      mediaRecorderRef.current = recorder;
+      const recorder = await startVoiceRecorder({
+        onTick: (secs) => setRecordTime(secs),
+      });
+      recorderRef.current = recorder;
+      recordStartRef.current = Date.now();
       setRecording(true);
       setRecordTime(0);
-      recordTimerRef.current = setInterval(() => setRecordTime((t) => t + 1), 1000);
     } catch (e) {
       console.error("mic access:", e);
       alert("无法访问麦克风，请检查权限");
     }
   };
 
-  const stopRecording = () => {
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
-      mediaRecorderRef.current.stop();
-    }
+  const stopRecording = async () => {
+    const recorder = recorderRef.current;
+    recorderRef.current = null;
     if (recordTimerRef.current) clearInterval(recordTimerRef.current);
     setRecording(false);
+    if (!recorder) return;
+    try {
+      const { b64, durationSecs } = await recorder.stop();
+      const duration = Math.max(1, Math.round(durationSecs));
+      const fileName = `voice_${Date.now()}.wav`;
+      const fileRec = await api.saveFileFromBase64(fileName, "audio/wav", b64);
+      const msg = await api.saveLocalMessage(convId, "voice", `${duration}`, "sent", false, fileRec.file_id);
+      appendMessage(convId, msg);
+      if (peerDeviceId) {
+        try {
+          await api.sendVoiceMessageFrame(peerDeviceId, msg.message_id, duration, "audio/wav", b64);
+          updateMessageInStore(convId, msg.message_id, { status: "sent" });
+        } catch (e) {
+          console.error("voice send failed:", e);
+          updateMessageInStore(convId, msg.message_id, { status: "failed" });
+        }
+      }
+    } catch (e) {
+      console.error(e);
+      alert("语音发送失败");
+    }
   };
 
   useEffect(() => {
     return () => {
       if (recordTimerRef.current) clearInterval(recordTimerRef.current);
-      if (streamRef.current) streamRef.current.getTracks().forEach((t) => t.stop());
+      recorderRef.current?.cancel();
+      recorderRef.current = null;
     };
   }, []);
 

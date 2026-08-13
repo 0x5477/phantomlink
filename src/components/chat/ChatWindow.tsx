@@ -2,7 +2,6 @@ import { useEffect, useRef } from "react";
 import { useStore } from "../../store";
 import MessageBubble from "./MessageBubble";
 import InputBar from "./InputBar";
-import VoiceCallModal from "./VoiceCallModal";
 import { Shield, Lock, Phone } from "lucide-react";
 
 export default function ChatWindow({ convId }: { convId: string }) {
@@ -27,8 +26,14 @@ export default function ChatWindow({ convId }: { convId: string }) {
   const startVoiceCall = () => {
     if (!peer) return;
     const roomId = `call_${Date.now()}`;
-    setVoiceCall({ active: true, roomId, peerId: peer.device_id, peerName: peer.display_name, incoming: false });
-    // The VoiceCallModal will handle sending the invite
+    setVoiceCall({
+      active: true, roomId,
+      peerId: peer.device_id, peerName: peer.display_name,
+      incoming: false, hostId: deviceId,
+      participants: [{ device_id: deviceId || "", name: "" }],
+      targets: [{ device_id: peer.device_id, name: peer.display_name }],
+    });
+    // The VoiceCallModal will create the room and send the invite
   };
 
   return (
@@ -74,7 +79,6 @@ export default function ChatWindow({ convId }: { convId: string }) {
       </div>
 
       <InputBar convId={convId} />
-      <VoiceCallModal />
     </div>
   );
 }

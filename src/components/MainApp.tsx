@@ -7,6 +7,7 @@ import ChatWindow from "./chat/ChatWindow";
 import SettingsPanel from "./settings/SettingsPanel";
 import BackupPanel from "./backup/BackupPanel";
 import MaidPet from "./pet/MaidPet";
+import VoiceCallModal from "./chat/VoiceCallModal";
 
 export default function MainApp() {
   const navSection = useStore((s) => s.navSection);
@@ -53,6 +54,7 @@ export default function MainApp() {
         )}
         <div className="flex-1 flex flex-col min-w-0">{showMain()}</div>
       </div>
+      <VoiceCallModal />
       <MaidPet />
     </>
   );

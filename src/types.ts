@@ -61,6 +61,9 @@ export interface AppSettings {
   network_port: number;
   self_destruct_enabled: boolean;
   theme: "dark" | "light";
+  pet_enabled: boolean;
+  pet_x: number;
+  pet_y: number;
 }
 
 export interface DeviceInfo {
@@ -102,4 +105,14 @@ export interface VoiceCallState {
   peerName: string;
   incoming: boolean;
   accepted: boolean;
+}
+
+export interface VoiceCallParticipant {
+  device_id: string;
+  name: string;
+}
+
+export interface VoiceCallTarget {
+  device_id: string;
+  name: string;
 }

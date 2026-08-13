@@ -2,7 +2,7 @@ import { create } from "zustand";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   AppView, AppSettings, ChatMessage, Conversation, Device, NavSection,
-  FriendRequest,
+  FriendRequest, VoiceCallParticipant, VoiceCallTarget,
 } from "../types";
 import { api } from "../lib/tauri";
 
@@ -28,6 +28,9 @@ interface AppState {
   voiceCallPeerId: string | null;
   voiceCallPeerName: string;
   voiceCallIncoming: boolean;
+  voiceCallHostId: string | null;
+  voiceCallParticipants: VoiceCallParticipant[];
+  voiceCallTargets: VoiceCallTarget[];
 
   setView: (v: AppView) => void;
   setNavSection: (s: NavSection) => void;
@@ -39,7 +42,7 @@ interface AppState {
   loadFriendRequests: () => Promise<void>;
   setLocked: (v: boolean) => void;
   setNetworkActive: (v: boolean) => void;
-  setVoiceCall: (s: Partial<{ active: boolean; roomId: string | null; peerId: string | null; peerName: string; incoming: boolean }>) => void;
+  setVoiceCall: (s: Partial<{ active: boolean; roomId: string | null; peerId: string | null; peerName: string; incoming: boolean; hostId: string | null; participants: VoiceCallParticipant[]; targets: VoiceCallTarget[] }>) => void;
   appendMessage: (convId: string, msg: ChatMessage) => void;
   updateMessageInStore: (convId: string, messageId: string, updates: Partial<ChatMessage>) => void;
   removeMessage: (convId: string, messageId: string) => void;
@@ -63,6 +66,9 @@ const defaultSettings: AppSettings = {
   network_port: 48443,
   self_destruct_enabled: false,
   theme: "dark",
+  pet_enabled: true,
+  pet_x: -1,
+  pet_y: -1,
 };
 
 let clipboardTimer: ReturnType<typeof setInterval> | null = null;
@@ -89,6 +95,9 @@ export const useStore = create<AppState>((set, get) => ({
   voiceCallPeerId: null,
   voiceCallPeerName: "",
   voiceCallIncoming: false,
+  voiceCallHostId: null,
+  voiceCallParticipants: [],
+  voiceCallTargets: [],
 
   setView: (v) => set({ view: v }),
   setNavSection: (s) => set({ navSection: s }),
@@ -118,7 +127,11 @@ export const useStore = create<AppState>((set, get) => ({
   loadSettings: async () => {
     try {
       const s = await api.getAllSettings();
-      set({ settings: { ...defaultSettings, ...s } });
+      const merged = { ...defaultSettings, ...s } as AppSettings;
+      // pet position is persisted as string by the backend settings store
+      merged.pet_x = typeof merged.pet_x === "string" ? (parseInt(merged.pet_x, 10) || -1) : merged.pet_x;
+      merged.pet_y = typeof merged.pet_y === "string" ? (parseInt(merged.pet_y, 10) || -1) : merged.pet_y;
+      set({ settings: merged });
     } catch (e) { console.error("loadSettings:", e); }
   },
 
@@ -137,6 +150,9 @@ export const useStore = create<AppState>((set, get) => ({
     voiceCallPeerId: s.peerId !== undefined ? s.peerId : state.voiceCallPeerId,
     voiceCallPeerName: s.peerName ?? state.voiceCallPeerName,
     voiceCallIncoming: s.incoming ?? state.voiceCallIncoming,
+    voiceCallHostId: s.hostId !== undefined ? s.hostId : state.voiceCallHostId,
+    voiceCallParticipants: s.participants !== undefined ? s.participants : state.voiceCallParticipants,
+    voiceCallTargets: s.targets !== undefined ? s.targets : state.voiceCallTargets,
   })),
 
   appendMessage: (convId, msg) =>
@@ -294,22 +310,36 @@ export const useStore = create<AppState>((set, get) => ({
       }),
     );
 
-    // Voice call events
+    // Voice call events (v1.4: room-based multi-party)
     unlisteners.push(
       await listen<{ sender_id: string; sender_name: string; room_id: string }>("voice-call-invite", (event) => {
-        get().setVoiceCall({ active: true, incoming: true, roomId: event.payload.room_id, peerId: event.payload.sender_id, peerName: event.payload.sender_name });
+        get().setVoiceCall({
+          active: true, incoming: true, roomId: event.payload.room_id,
+          peerId: event.payload.sender_id, peerName: event.payload.sender_name,
+          hostId: event.payload.sender_id, participants: [], targets: [],
+        });
+      }),
+    );
+    unlisteners.push(
+      await listen<{ room_id: string; participants: string[]; names: string[] }>("voice-call-participants", (event) => {
+        if (event.payload.room_id !== get().voiceCallRoomId) return;
+        const participants: VoiceCallParticipant[] = event.payload.participants.map((device_id, i) => ({
+          device_id,
+          name: event.payload.names[i] || device_id.slice(0, 8),
+        }));
+        get().setVoiceCall({ participants });
       }),
     );
     unlisteners.push(
       await listen<{ responder_id: string; room_id: string; accepted: boolean }>("voice-call-response", (event) => {
         if (!event.payload.accepted) {
-          get().setVoiceCall({ active: false, roomId: null, peerId: null, peerName: "", incoming: false });
+          get().setVoiceCall({ active: false, roomId: null, peerId: null, peerName: "", incoming: false, hostId: null, participants: [], targets: [] });
         }
       }),
     );
     unlisteners.push(
       await listen("voice-call-end", () => {
-        get().setVoiceCall({ active: false, roomId: null, peerId: null, peerName: "", incoming: false });
+        get().setVoiceCall({ active: false, roomId: null, peerId: null, peerName: "", incoming: false, hostId: null, participants: [], targets: [] });
       }),
     );
 

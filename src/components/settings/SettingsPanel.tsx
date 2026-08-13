@@ -3,7 +3,7 @@ import { useStore } from "../../store";
 import { api } from "../../lib/tauri";
 import {
   Shield, Clipboard, Database, Wifi, Lock, Info, Sun, Moon,
-  Skull, AlertTriangle, CheckCircle, Trash2, User, Camera,
+  Skull, AlertTriangle, CheckCircle, Trash2, User, Camera, Sparkles,
 } from "lucide-react";
 
 export default function SettingsPanel() {
@@ -120,6 +120,13 @@ export default function SettingsPanel() {
               <Moon size={14} /> 夜间
             </button>
           </div>
+        </Row>
+      </Section>
+
+      {/* Pet */}
+      <Section title="桌面宠物" icon={Sparkles}>
+        <Row label="显示桌面宠物" desc="右下角的《工作细胞》风格小助手，可拖动位置">
+          <Toggle checked={settings.pet_enabled} onChange={(v) => updateSetting("pet_enabled", String(v))} />
         </Row>
       </Section>
 

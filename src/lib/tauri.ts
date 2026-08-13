@@ -86,6 +86,17 @@ export const api = {
     invoke<void>("send_voice_call_response", { peerDeviceId, roomId, accepted }),
   sendVoiceCallEnd: (peerDeviceId: string, roomId: string) =>
     invoke<void>("send_voice_call_end", { peerDeviceId, roomId }),
+  // v1.4 additions: room-based multi-party calls + dedicated voice messages
+  voiceCallStartRoom: (roomId: string) =>
+    invoke<void>("voice_call_start_room", { roomId }),
+  voiceCallJoin: (hostDeviceId: string, roomId: string) =>
+    invoke<void>("voice_call_join", { hostDeviceId, roomId }),
+  voiceCallLeave: (hostDeviceId: string, roomId: string) =>
+    invoke<void>("voice_call_leave", { hostDeviceId, roomId }),
+  voiceCallEndRoom: (roomId: string) =>
+    invoke<void>("voice_call_end_room", { roomId }),
+  sendVoiceMessageFrame: (peerDeviceId: string, messageId: string, durationSecs: number, mime: string, audioB64: string) =>
+    invoke<void>("send_voice_message_frame", { peerDeviceId, messageId, durationSecs, mime, audioB64 }),
   sendStickerFrame: (peerDeviceId: string, messageId: string, stickerId: string) =>
     invoke<void>("send_sticker_frame", { peerDeviceId, messageId, stickerId }),
 };

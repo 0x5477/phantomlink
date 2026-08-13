@@ -151,6 +151,41 @@ pub enum Frame {
         channels: i64,
     },
 
+    /// Join an active call room (sent by a participant to the room host).
+    #[serde(rename = "voice_call_join")]
+    VoiceCallJoin {
+        sender_id: String,
+        sender_name: String,
+        room_id: String,
+    },
+
+    /// Leave an active call room (sent by a participant to the room host).
+    #[serde(rename = "voice_call_leave")]
+    VoiceCallLeave {
+        sender_id: String,
+        room_id: String,
+    },
+
+    /// Call room participant list sync (sent by the host to all members).
+    #[serde(rename = "voice_call_participants")]
+    VoiceCallParticipants {
+        room_id: String,
+        participants: Vec<String>,
+        names: Vec<String>,
+    },
+
+    /// Dedicated voice message carrying the encoded audio in one frame.
+    #[serde(rename = "voice_message")]
+    VoiceMessage {
+        message_id: String,
+        sender_id: String,
+        recipient_id: String,
+        timestamp: i64,
+        duration_secs: i64,
+        mime: String,
+        audio_b64: String,
+    },
+
     /// Profile update notification.
     #[serde(rename = "profile_update")]
     ProfileUpdate {
