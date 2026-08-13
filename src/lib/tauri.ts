@@ -107,4 +107,5 @@ export const api = {
     invoke<string>("download_release_asset", { url, fileName }),
   checkLatestRelease: () =>
     invoke<{ tag_name?: string; name?: string; html_url?: string; assets?: { name: string; browser_download_url: string }[] }>("check_latest_release"),
+  captureScreenshot: () => invoke<string>("capture_screenshot"),
 };

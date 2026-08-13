@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>PhantomLink 需要访问麦克风，用于录制语音消息和语音通话</string>
+  <key>NSCameraUsageDescription</key>
+  <string>PhantomLink 需要访问摄像头，用于拍摄并发送图片</string>
+  <key>NSScreenCaptureUsageDescription</key>
+  <string>PhantomLink 需要屏幕录制权限，用于截图并发送</string>
+</dict>
+</plist>

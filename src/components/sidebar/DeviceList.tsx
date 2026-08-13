@@ -15,6 +15,7 @@ export default function DeviceList() {
   const friendRequests = useStore((s) => s.friendRequests);
   const loadFriendRequests = useStore((s) => s.loadFriendRequests);
   const setVoiceCall = useStore((s) => s.setVoiceCall);
+  const localIps = useStore((s) => s.localIps);
   const [showPair, setShowPair] = useState(false);
   const [pairInfo, setPairInfo] = useState<{ code: string; fp: string } | null>(null);
   const [showAdd, setShowAdd] = useState(false);
@@ -67,11 +68,33 @@ export default function DeviceList() {
   const handleScan = async () => {
     setScanning(true);
     try {
-      const found = await api.discoverPeers();
-      setPeers(found);
+      const [mdnsPeers, routePeers] = await Promise.all([
+        api.discoverPeers().catch(() => [] as DiscoveredPeer[]),
+        api.routeScan(suggestLocalNetworks(localIps)).catch(() => [] as DiscoveredPeer[]),
+      ]);
+      // Merge & de-duplicate by device id (TCP probe covers routers that drop mDNS).
+      const map = new Map<string, DiscoveredPeer>();
+      for (const p of [...mdnsPeers, ...routePeers]) {
+        const existing = map.get(p.device_id);
+        if (!existing || existing.ip === p.ip) map.set(p.device_id, p);
+      }
+      setPeers(Array.from(map.values()));
     } catch (e) { console.error("discover:", e); }
     setScanning(false);
   };
+
+  function suggestLocalNetworks(ips: string[]): string[] {
+    const ip = ips.find((x) => x.includes(".")) || "";
+    const parts = ip.split(".");
+    if (parts.length !== 4) return [];
+    const a = parseInt(parts[0], 10), b = parseInt(parts[1], 10), c = parseInt(parts[2], 10);
+    if (Number.isNaN(a) || Number.isNaN(b) || Number.isNaN(c)) return [];
+    const nets: string[] = [];
+    for (let cc = c - 1; cc <= c + 1; cc++) {
+      if (cc >= 0 && cc <= 255) nets.push(`${a}.${b}.${cc}.0/24`);
+    }
+    return nets;
+  }
 
   const toggleCallSelect = (dev: { device_id: string; display_name: string }) => {
     setCallSelected((prev) => {

@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef } from "react";
-import { Flame, Lock, Check, CheckCheck, Clock, AlertCircle, Play, Pause, RefreshCw } from "lucide-react";
+import { Flame, Lock, Check, CheckCheck, Clock, AlertCircle, Play, Pause, RefreshCw, Download } from "lucide-react";
 import type { ChatMessage } from "../../types";
 import { useStore } from "../../store";
 import { api } from "../../lib/tauri";
@@ -247,9 +247,31 @@ export default function MessageBubble({
 }
 
 function FileContent({ msg }: { msg: ChatMessage }) {
+  const [downloading, setDownloading] = useState(false);
   if (!msg.file_info) return <p>{msg.content}</p>;
   const f = msg.file_info;
   const sizeStr = f.size < 1024 ? `${f.size} B` : f.size < 1024 * 1024 ? `${(f.size / 1024).toFixed(1)} KB` : `${(f.size / 1024 / 1024).toFixed(1)} MB`;
+
+  const handleDownload = async () => {
+    if (downloading) return;
+    setDownloading(true);
+    try {
+      const b64 = await api.loadFileToBase64(f.stored_name);
+      const path = await api.saveDownloadedFile(f.original_name || "download.bin", b64);
+      try {
+        const { openPath } = await import("@tauri-apps/plugin-opener");
+        await openPath(path);
+      } catch {
+        alert(`文件已保存到：
+${path}`);
+      }
+    } catch (e) {
+      console.error("download file:", e);
+      alert("下载失败，请重试");
+    }
+    setDownloading(false);
+  };
+
   return (
     <div className="flex items-center gap-3 min-w-[200px]">
       <div className="w-10 h-10 rounded-lg pl-glass flex items-center justify-center flex-shrink-0">
@@ -262,6 +284,9 @@ function FileContent({ msg }: { msg: ChatMessage }) {
         <p className="text-sm truncate">{f.original_name}</p>
         <p className="text-xs pl-text-dim">{sizeStr}</p>
       </div>
+      <button onClick={handleDownload} disabled={downloading} title="下载到本地" className="pl-btn-ghost rounded-lg p-1.5 flex-shrink-0 disabled:opacity-40">
+        <Download size={14} className={downloading ? "animate-bounce" : "pl-text-cyan"} />
+      </button>
     </div>
   );
 }

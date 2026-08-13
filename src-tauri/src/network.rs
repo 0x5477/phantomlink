@@ -369,9 +369,13 @@ impl NetworkManager {
             return Err(format!("address {addr} is not on LAN"));
         }
 
-        let stream = TcpStream::connect(addr)
-            .await
-            .map_err(|e| format!("connect {addr}: {e}"))?;
+        let stream = tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            TcpStream::connect(addr),
+        )
+        .await
+        .map_err(|_| format!("connect {addr} timed out"))?
+        .map_err(|e| format!("connect {addr}: {e}"))?;
 
         log::info!("Connected to peer at {addr}");
 

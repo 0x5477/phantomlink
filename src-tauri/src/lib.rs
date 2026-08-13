@@ -18,7 +18,7 @@ use db::{ChatMessage, Conversation, Database, Device, FileRecord, Message};
 use network::DiscoveredPeer;
 use protocol::Frame;
 
-const APP_VERSION: &str = "1.5.0";
+const APP_VERSION: &str = "1.5.1";
 
 // ---- Vault lifecycle ----
 
@@ -192,6 +192,53 @@ fn get_device_info(state: State<'_, Arc<AppStateData>>) -> Result<serde_json::Va
 #[tauri::command]
 fn get_app_version() -> String {
     APP_VERSION.to_string()
+}
+
+/// Capture the screen and return the PNG as base64.
+#[tauri::command]
+fn capture_screenshot() -> Result<String, String> {
+    use base64::Engine as _;
+    let tmp = std::env::temp_dir().join(format!("pl_shot_{}.png", uuid::Uuid::new_v4()));
+    let tmp_str = tmp.to_string_lossy().into_owned();
+
+    #[cfg(target_os = "macos")]
+    {
+        let status = std::process::Command::new("screencapture")
+            .args(["-x", "-t", "png"])
+            .arg(&tmp_str)
+            .status()
+            .map_err(|e| format!("screencapture: {e}"))?;
+        if !status.success() {
+            let _ = std::fs::remove_file(&tmp);
+            return Err("截图失败：请在「系统设置 → 隐私与安全性 → 屏幕录制」中允许 PhantomLink".into());
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let script = format!(
+            "Add-Type -AssemblyName System.Windows.Forms,System.Drawing; \
+             $b=[System.Windows.Forms.SystemInformation]::VirtualScreen; \
+             $bmp=New-Object System.Drawing.Bitmap $b.Width,$b.Height; \
+             $g=[System.Drawing.Graphics]::FromImage($bmp); \
+             $g.CopyFromScreen($b.Left,$b.Top,0,0,$bmp.Size); \
+             $bmp.Save('{tmp_str}',[System.Drawing.Imaging.ImageFormat]::Png); \
+             $g.Dispose(); $bmp.Dispose()",
+            tmp_str = tmp_str.replace('\'', "''")
+        );
+        let status = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-WindowStyle", "Hidden", "-Command", &script])
+            .status()
+            .map_err(|e| format!("powershell: {e}"))?;
+        if !status.success() {
+            let _ = std::fs::remove_file(&tmp);
+            return Err("截图失败".into());
+        }
+    }
+
+    let data = std::fs::read(&tmp).map_err(|e| format!("read screenshot: {e}"))?;
+    let _ = std::fs::remove_file(&tmp);
+    Ok(base64::engine::general_purpose::STANDARD.encode(&data))
 }
 
 /// Save a downloaded release asset (base64) into the user's Downloads folder.
@@ -1918,7 +1965,7 @@ pub fn run() {
            get_devices, get_local_ip, add_device, delete_device, discover_peers, route_scan, get_connected_peers,
            get_conversations, get_or_create_private_conversation, reset_unread,
            get_messages, save_local_message, search_messages, update_message_status, burn_message, delete_message,
-           get_setting, set_setting, get_all_settings, save_downloaded_file, download_release_asset, check_latest_release,
+           get_setting, set_setting, get_all_settings, save_downloaded_file, download_release_asset, check_latest_release, capture_screenshot,
            save_file_from_base64, load_file_to_base64,
            start_network, stop_network, connect_to_peer, send_frame_to_peer, send_message_frame, send_file_frame,
            export_backup, import_backup,

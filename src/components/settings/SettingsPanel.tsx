@@ -106,7 +106,7 @@ export default function SettingsPanel() {
     try {
       const rel = await api.checkLatestRelease();
       const tag = String(rel.tag_name || "").replace(/^v/, "");
-      const cur = String(appVersion || "1.5.0").replace(/^v/, "");
+      const cur = String(appVersion || "1.5.1").replace(/^v/, "");
       setUpdateInfo({ tag: rel.tag_name || tag, name: rel.name || "", url: rel.html_url || `https://github.com/${GH_REPO}/releases` });
       setUpdateState(cmpVersion(tag, cur) > 0 ? "available" : "latest");
     } catch (e) {
@@ -194,7 +194,7 @@ ${path}`);
 
       {/* Pet */}
       <Section title="桌面宠物" icon={Sparkles}>
-        <Row label="显示桌面宠物" desc="右下角的《工作细胞》风格小助手，可拖动位置">
+        <Row label="显示桌面宠物" desc="右下角开源桌宠精灵图（柯基/橘猫/小兔），可拖动位置、点击互动">
           <Toggle checked={settings.pet_enabled} onChange={(v) => updateSetting("pet_enabled", String(v))} />
         </Row>
       </Section>
@@ -286,7 +286,7 @@ ${path}`);
           <div className="space-y-2">
             <div className="flex justify-between text-xs">
               <span className="pl-text-dim">当前版本</span>
-              <span className="font-mono pl-text-cyan">v{appVersion || "1.5.0"}</span>
+              <span className="font-mono pl-text-cyan">v{appVersion || "1.5.1"}</span>
             </div>
             <div className="flex justify-between text-xs">
               <span className="pl-text-dim">加密方案</span>

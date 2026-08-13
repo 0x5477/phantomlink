@@ -5,7 +5,7 @@ import { useStore } from "../../store";
 import { api } from "../../lib/tauri";
 import { startVoiceRecorder, type VoiceRecorder } from "../../lib/audio";
 
-const MAX_FILE_SIZE = 500 * 1024 * 1024;
+const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB (safe for IPC base64 transfer)
 
 const STICKERS = [
   "🎉", "🎊", "🎈", "🎁", "🏆", "💯", "🔥", "⭐",
@@ -52,25 +52,16 @@ export default function InputBar({ convId }: { convId: string }) {
 
   const handleScreenshot = async () => {
     try {
-      const clipboardItems = await navigator.clipboard.read().catch(() => null);
-      if (clipboardItems) {
-        for (const type of (clipboardItems as any).types || []) {
-          if (type.startsWith("image/")) {
-            const blob = await (clipboardItems as any).getType(type);
-            const reader = new FileReader();
-            reader.onload = async () => {
-              const result = reader.result as string;
-              const b64 = result.split(",")[1];
-              setFilePreview({ name: `screenshot_${Date.now()}.png`, size: blob.size, b64, mime: "image/png" });
-            };
-            reader.readAsDataURL(blob);
-            return;
-          }
-        }
-      }
-      alert("请先截图（Win: Win+Shift+S, Mac: Cmd+Shift+4），截图后自动粘贴到输入框。快捷键 Alt+A");
+      const b64 = await api.captureScreenshot();
+      setFilePreview({
+        name: `screenshot_${Date.now()}.png`,
+        size: Math.round(b64.length * 0.75),
+        b64,
+        mime: "image/png",
+      });
     } catch (e) {
       console.error("screenshot:", e);
+      alert("截图失败：" + e + "\nmacOS 请在「系统设置 → 隐私与安全性 → 屏幕录制」中允许 PhantomLink 后重试。快捷键 Alt+A");
     }
   };
 

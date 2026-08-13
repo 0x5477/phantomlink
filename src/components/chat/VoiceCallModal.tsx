@@ -6,7 +6,7 @@ import { Phone, PhoneOff, Mic, MicOff, Users } from "lucide-react";
 import type { VoiceCallParticipant } from "../../types";
 
 const BUFFER_SIZE = 2048;
-const RING_TIMEOUT_MS = 45000;
+const RING_TIMEOUT_MS = 60000;
 
 export default function VoiceCallModal() {
   const voiceCallActive = useStore((s) => s.voiceCallActive);
@@ -70,8 +70,6 @@ export default function VoiceCallModal() {
   };
 
   const resetAll = () => {
-    if (endedRef.current) return;
-    endedRef.current = true;
     cleanupAudio();
     setCallState("ringing");
     setDuration(0);
@@ -91,6 +89,11 @@ export default function VoiceCallModal() {
     if (roomId) {
       if (isHostRef.current) {
         api.voiceCallEndRoom(roomId).catch(() => {});
+        // Also notify invitees who have not joined the room yet.
+        const st = useStore.getState();
+        for (const t of st.voiceCallTargets) {
+          api.sendVoiceCallEnd(t.device_id, roomId).catch(() => {});
+        }
       } else if (hostId) {
         api.voiceCallLeave(hostId, roomId).catch(() => {});
       }
@@ -231,8 +234,18 @@ export default function VoiceCallModal() {
         if (voiceCallRoomId) {
           await api.voiceCallStartRoom(voiceCallRoomId).catch((e) => console.error("start room:", e));
           const targets = voiceCallTargets.length > 0 ? voiceCallTargets : (voiceCallPeerId ? [{ device_id: voiceCallPeerId, name: voiceCallPeerName }] : []);
+          let okCount = 0;
           for (const t of targets) {
-            await api.sendVoiceCallInvite(t.device_id, voiceCallRoomId, targets.length > 1 ? "group" : "private").catch(() => {});
+            try {
+              await api.sendVoiceCallInvite(t.device_id, voiceCallRoomId, targets.length > 1 ? "group" : "private");
+              okCount += 1;
+            } catch (e) {
+              console.error("invite failed:", e);
+            }
+          }
+          if (okCount === 0 && targets.length > 0) {
+            endCall("无法联系对方，请确认设备在线");
+            return;
           }
           const me = useStore.getState().deviceId;
           useStore.getState().setVoiceCall({ participants: [{ device_id: me || "", name: localNameRef.current }] });
