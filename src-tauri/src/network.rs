@@ -10,6 +10,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
 
+use crate::protocol::{self, Frame};
+
 pub const SERVICE_TYPE: &str = "_phantomlink._tcp.local.";
 pub const DEFAULT_PORT: u16 = 48443;
 
@@ -75,6 +77,7 @@ pub struct NetworkManager {
     mdns: Arc<Mutex<Option<mdns_sd::ServiceDaemon>>>,
     registered: Arc<Mutex<bool>>,
     frame_tx: Arc<Mutex<Option<mpsc::UnboundedSender<(String, Vec<u8>)>>>>,
+    self_id: Arc<Mutex<Option<String>>>,
 }
 
 impl NetworkManager {
@@ -86,6 +89,7 @@ impl NetworkManager {
             mdns: Arc::new(Mutex::new(None)),
             registered: Arc::new(Mutex::new(false)),
             frame_tx: Arc::new(Mutex::new(None)),
+            self_id: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -98,6 +102,25 @@ impl NetworkManager {
             .lock()
             .unwrap()
             .insert(device_id.to_string(), conn_key.to_string());
+    }
+
+    pub fn set_self_id(&self, device_id: &str) {
+        *self.self_id.lock().unwrap() = Some(device_id.to_string());
+    }
+
+    pub fn self_id(&self) -> Option<String> {
+        self.self_id.lock().unwrap().clone()
+    }
+
+    /// Send our presence so the peer can learn our device id and route replies.
+    pub fn send_presence(&self) {
+        let Some(sender_id) = self.self_id() else { return };
+        let frame = Frame::Presence { sender_id, status: "online".to_string() };
+        let encoded = protocol::encode_frame(&frame);
+        let peers = self.connected_peers();
+        for pid in peers {
+            let _ = self.send_to_peer(&pid, encoded.clone());
+        }
     }
 
     fn resolve_conn_key(&self, device_id: &str) -> Option<String> {
@@ -321,6 +344,10 @@ impl NetworkManager {
         port: u16,
         device_id: String,
     ) -> Result<(), String> {
+        // Avoid duplicate connections: reuse an existing route if present.
+        if self.is_connected(&device_id) {
+            return Ok(());
+        }
         let addr_str = format!("{ip}:{port}");
         let addr: SocketAddr = addr_str
             .parse()
@@ -345,6 +372,13 @@ impl NetworkManager {
             .lock()
             .unwrap()
             .insert(device_id.clone(), conn_key.clone());
+
+        // Identity handshake: let the peer know who we are so replies route back.
+        if let Some(sender_id) = self.self_id.lock().unwrap().clone() {
+            let frame = Frame::Presence { sender_id, status: "online".to_string() };
+            let encoded = protocol::encode_frame(&frame);
+            let _ = self.send_to_peer(&device_id, encoded);
+        }
 
         if let Some(ftx) = self.frame_tx.lock().unwrap().clone() {
             let source = conn_key.clone();

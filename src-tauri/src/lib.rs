@@ -17,7 +17,7 @@ use db::{ChatMessage, Conversation, Database, Device, FileRecord, Message};
 use network::DiscoveredPeer;
 use protocol::Frame;
 
-const APP_VERSION: &str = "1.4.1";
+const APP_VERSION: &str = "1.4.2";
 
 // ---- Vault lifecycle ----
 
@@ -222,6 +222,29 @@ fn downloads_dir() -> std::path::PathBuf {
     } else {
         std::env::temp_dir()
     }
+}
+
+/// Query the latest GitHub release metadata.
+#[tauri::command]
+fn check_latest_release(state: State<'_, Arc<AppStateData>>) -> Result<serde_json::Value, String> {
+    let url = "https://api.github.com/repos/0x5477/phantomlink/releases/latest";
+    state.runtime.block_on(async {
+        let client = reqwest::Client::builder()
+            .user_agent(format!("PhantomLink/{}", APP_VERSION))
+            .build()
+            .map_err(|e| format!("http client: {e}"))?;
+        let resp = client
+            .get(url)
+            .send()
+            .await
+            .map_err(|e| format!("check update: {e}"))?;
+        if !resp.status().is_success() {
+            return Err(format!("HTTP {}", resp.status()));
+        }
+        resp.json::<serde_json::Value>()
+            .await
+            .map_err(|e| format!("parse release: {e}"))
+    })
 }
 
 /// Download a GitHub release asset (follows redirects) and save it to Downloads.
@@ -1011,6 +1034,7 @@ fn start_network(display_name: String, state: State<'_, Arc<AppStateData>>) -> R
     let fingerprint = crypto::fingerprint_hex(&public_key);
 
     state.network.start_mdns(&device_id, &display_name, &fingerprint)?;
+    state.network.set_self_id(&device_id);
 
     let local_ips = network::get_local_ipv4_addrs();
 
@@ -1032,6 +1056,9 @@ fn start_network(display_name: String, state: State<'_, Arc<AppStateData>>) -> R
             }
         }
     }
+
+    // Identity handshake for every connection we already have.
+    state.network.send_presence();
 
     Ok(serde_json::json!({
         "device_id": device_id,
@@ -1731,7 +1758,7 @@ pub fn run() {
            get_devices, get_local_ip, add_device, delete_device, discover_peers, get_connected_peers,
            get_conversations, get_or_create_private_conversation, reset_unread,
            get_messages, save_local_message, search_messages, update_message_status, burn_message, delete_message,
-           get_setting, set_setting, get_all_settings, save_downloaded_file, download_release_asset,
+           get_setting, set_setting, get_all_settings, save_downloaded_file, download_release_asset, check_latest_release,
            save_file_from_base64, load_file_to_base64,
            start_network, stop_network, connect_to_peer, send_frame_to_peer, send_message_frame, send_file_frame,
            export_backup, import_backup,

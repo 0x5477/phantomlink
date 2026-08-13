@@ -6,6 +6,7 @@ import { Phone, PhoneOff, Mic, MicOff, Users } from "lucide-react";
 import type { VoiceCallParticipant } from "../../types";
 
 const BUFFER_SIZE = 2048;
+const RING_TIMEOUT_MS = 45000;
 
 export default function VoiceCallModal() {
   const voiceCallActive = useStore((s) => s.voiceCallActive);
@@ -22,6 +23,7 @@ export default function VoiceCallModal() {
   const [callState, setCallState] = useState<"ringing" | "connected" | "ended">("ringing");
   const [muted, setMuted] = useState(false);
   const [duration, setDuration] = useState(0);
+  const [notice, setNotice] = useState<string | null>(null);
 
   const audioCtxRef = useRef<AudioContext | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -33,6 +35,8 @@ export default function VoiceCallModal() {
   const ringTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const unlistenersRef = useRef<UnlistenFn[]>([]);
   const joinedRef = useRef(false);
+  const endedRef = useRef(false);
+  const maxParticipantsRef = useRef(1);
   const mutedRef = useRef(false);
   const localNameRef = useRef(deviceName || "我");
 
@@ -47,22 +51,16 @@ export default function VoiceCallModal() {
   const hostIdRef = useRef(voiceCallHostId);
   hostIdRef.current = voiceCallHostId;
 
-  const resetAll = () => {
-    setCallState("ringing");
-    setDuration(0);
-    setMuted(false);
-    mutedRef.current = false;
-    joinedRef.current = false;
-    setVoiceCall({ active: false, roomId: null, peerId: null, peerName: "", incoming: false, hostId: null, participants: [], targets: [] });
-  };
-
   const cleanupAudio = () => {
     if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
     if (ringTimeoutRef.current) { clearTimeout(ringTimeoutRef.current); ringTimeoutRef.current = null; }
     try { processorRef.current?.disconnect(); } catch {}
     try { sourceRef.current?.disconnect(); } catch {}
     try { gainRef.current?.disconnect(); } catch {}
-    if (streamRef.current) { streamRef.current.getTracks().forEach((t) => t.stop()); streamRef.current = null; }
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
+    }
     try { if (audioCtxRef.current && audioCtxRef.current.state !== "closed") void audioCtxRef.current.close(); } catch {}
     audioCtxRef.current = null;
     processorRef.current = null;
@@ -71,8 +69,23 @@ export default function VoiceCallModal() {
     sequenceRef.current = 0;
   };
 
-  const endCall = () => {
-    // Notify the room (host ends for everyone, participant leaves).
+  const resetAll = () => {
+    if (endedRef.current) return;
+    endedRef.current = true;
+    cleanupAudio();
+    setCallState("ringing");
+    setDuration(0);
+    setMuted(false);
+    mutedRef.current = false;
+    joinedRef.current = false;
+    setNotice(null);
+    setVoiceCall({ active: false, roomId: null, peerId: null, peerName: "", incoming: false, hostId: null, participants: [], targets: [] });
+  };
+
+  /** Idempotent end: notify the room once, release all resources once. */
+  const endCall = (reason?: string) => {
+    if (endedRef.current) return;
+    endedRef.current = true;
     const roomId = roomIdRef.current;
     const hostId = hostIdRef.current;
     if (roomId) {
@@ -83,16 +96,19 @@ export default function VoiceCallModal() {
       }
     }
     cleanupAudio();
+    setNotice(reason || null);
     setCallState("ended");
-    setTimeout(resetAll, 600);
+    setTimeout(resetAll, reason ? 1800 : 600);
   };
 
   // Capture mic + send loop (host sends to all participants, participant sends to host).
   const startAudioStream = async () => {
     try {
+      if (endedRef.current) return;
       if (!audioCtxRef.current) audioCtxRef.current = new AudioContext();
       if (audioCtxRef.current.state === "suspended") await audioCtxRef.current.resume();
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      if (endedRef.current) { stream.getTracks().forEach((t) => t.stop()); return; }
       streamRef.current = stream;
       const ctx = audioCtxRef.current;
       const source = ctx.createMediaStreamSource(stream);
@@ -107,7 +123,7 @@ export default function VoiceCallModal() {
       processor.onaudioprocess = (e) => {
         const st = useStore.getState();
         if (!st.voiceCallActive || st.voiceCallRoomId !== roomIdRef.current) return;
-        if (mutedRef.current) return;
+        if (mutedRef.current || endedRef.current) return;
         const inputData = e.inputBuffer.getChannelData(0);
         const samples = new Float32Array(inputData);
         const bytes = new Uint8Array(samples.buffer);
@@ -119,13 +135,11 @@ export default function VoiceCallModal() {
         const seq = sequenceRef.current;
         const sampleRate = ctx.sampleRate;
         if (isHostRef.current) {
-          // Host: send directly to every other participant.
           const others = st.voiceCallParticipants.filter((p) => p.device_id !== st.deviceId);
           for (const p of others) {
             api.sendVoiceFrame(p.device_id, roomId, seq, b64, sampleRate, 1).catch(() => {});
           }
         } else if (hostIdRef.current) {
-          // Participant: send to the host, which relays to the rest.
           api.sendVoiceFrame(hostIdRef.current, roomId, seq, b64, sampleRate, 1).catch(() => {});
         }
       };
@@ -135,11 +149,12 @@ export default function VoiceCallModal() {
       gain.connect(ctx.destination);
     } catch (e) {
       console.error("audio stream:", e);
-      alert("无法访问麦克风，请检查权限");
+      setNotice("无法访问麦克风，请检查权限");
     }
   };
 
   const playAudioChunk = (b64: string, sampleRate: number, channels: number) => {
+    if (endedRef.current) return;
     if (!audioCtxRef.current) audioCtxRef.current = new AudioContext();
     const ctx = audioCtxRef.current;
     if (ctx.state === "suspended") void ctx.resume();
@@ -162,18 +177,21 @@ export default function VoiceCallModal() {
   // Set up listeners + initial actions when the call becomes active.
   useEffect(() => {
     if (!voiceCallActive) return;
+    endedRef.current = false;
+    maxParticipantsRef.current = 1;
 
     const setup = async () => {
       unlistenersRef.current.push(
         await listen<{ room_id: string; participants: string[]; names: string[] }>("voice-call-participants", (event) => {
-          if (event.payload.room_id !== voiceCallRoomId) return;
+          if (event.payload.room_id !== roomIdRef.current || endedRef.current) return;
           const participants: VoiceCallParticipant[] = event.payload.participants.map((device_id, i) => ({
             device_id,
             name: event.payload.names[i] || device_id.slice(0, 8),
           }));
+          maxParticipantsRef.current = Math.max(maxParticipantsRef.current, participants.length);
           useStore.getState().setVoiceCall({ participants });
           // Participant becomes connected once the host has registered us.
-          if (!isHostRef.current && !joinedRef.current && voiceCallRoomId) {
+          if (!isHostRef.current && !joinedRef.current) {
             const me = useStore.getState().deviceId;
             if (participants.some((p) => p.device_id === me)) {
               joinedRef.current = true;
@@ -181,40 +199,41 @@ export default function VoiceCallModal() {
               void startAudioStream();
             }
           } else if (isHostRef.current && participants.length >= 2) {
-            // Host: a participant joined -> call is live.
             setCallState("connected");
+          }
+          // If we are connected and every other participant has left -> hang up.
+          if (callStateRef.current === "connected" && maxParticipantsRef.current >= 2 && participants.length <= 1) {
+            endCall("对方已挂断，通话结束");
           }
         }),
       );
       unlistenersRef.current.push(
         await listen<{ sender_id: string; room_id: string }>("voice-call-end", (event) => {
-          if (event.payload.room_id === voiceCallRoomId) endCall();
+          if (event.payload.room_id === roomIdRef.current) endCall("对方已挂断，通话结束");
         }),
       );
       unlistenersRef.current.push(
         await listen<{ responder_id: string; room_id: string; accepted: boolean }>("voice-call-response", (event) => {
-          if (event.payload.room_id === voiceCallRoomId && !event.payload.accepted) {
-            endCall();
+          if (event.payload.room_id === roomIdRef.current && !event.payload.accepted) {
+            endCall("对方已拒绝通话");
           }
         }),
       );
       unlistenersRef.current.push(
         await listen<{ sender_id: string; room_id: string; audio_data: string; sample_rate: number; channels: number }>("voice-data", (event) => {
-          if (event.payload.room_id === voiceCallRoomId) {
+          if (event.payload.room_id === roomIdRef.current) {
             playAudioChunk(event.payload.audio_data, event.payload.sample_rate, event.payload.channels);
           }
         }),
       );
 
       if (isHost) {
-        // Host: create the room and invite everyone.
         if (voiceCallRoomId) {
           await api.voiceCallStartRoom(voiceCallRoomId).catch((e) => console.error("start room:", e));
           const targets = voiceCallTargets.length > 0 ? voiceCallTargets : (voiceCallPeerId ? [{ device_id: voiceCallPeerId, name: voiceCallPeerName }] : []);
           for (const t of targets) {
             await api.sendVoiceCallInvite(t.device_id, voiceCallRoomId, targets.length > 1 ? "group" : "private").catch(() => {});
           }
-          // Host's own mic starts right away; audio is sent to participants as they join.
           const me = useStore.getState().deviceId;
           useStore.getState().setVoiceCall({ participants: [{ device_id: me || "", name: localNameRef.current }] });
           void startAudioStream();
@@ -227,9 +246,15 @@ export default function VoiceCallModal() {
     return () => {
       unlistenersRef.current.forEach((u) => u());
       unlistenersRef.current = [];
+      // Always release audio/mic resources on unmount (fixes memory leaks).
+      cleanupAudio();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [voiceCallActive]);
+
+  // Keep callState in a ref for the participants listener.
+  const callStateRef = useRef(callState);
+  callStateRef.current = callState;
 
   // Duration timer
   useEffect(() => {
@@ -243,11 +268,11 @@ export default function VoiceCallModal() {
   useEffect(() => {
     if (callState === "ringing" && !voiceCallIncoming) {
       ringTimeoutRef.current = setTimeout(() => {
-        alert("对方无人接听，通话已结束");
-        endCall();
-      }, 45000);
+        endCall("对方无人接听，通话已结束");
+      }, RING_TIMEOUT_MS);
     }
     return () => { if (ringTimeoutRef.current) { clearTimeout(ringTimeoutRef.current); ringTimeoutRef.current = null; } };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [callState, voiceCallIncoming]);
 
   const acceptCall = async () => {
@@ -262,8 +287,7 @@ export default function VoiceCallModal() {
     if (voiceCallPeerId && voiceCallRoomId) {
       await api.sendVoiceCallResponse(voiceCallPeerId, voiceCallRoomId, false).catch(() => {});
     }
-    cleanupAudio();
-    resetAll();
+    endCall();
   };
 
   const toggleMute = () => setMuted((m) => !m);
@@ -287,7 +311,7 @@ export default function VoiceCallModal() {
         <p className="text-xs pl-text-dim mb-4">
           {callState === "ringing" && (voiceCallIncoming ? "来电中..." : "正在呼叫...")}
           {callState === "connected" && `通话中 ${formatTime(duration)}`}
-          {callState === "ended" && "通话结束"}
+          {callState === "ended" && (notice || "通话结束")}
         </p>
 
         {/* Participant list */}
@@ -318,14 +342,14 @@ export default function VoiceCallModal() {
             <button onClick={toggleMute} className={`w-14 h-14 rounded-full flex items-center justify-center transition-all ${muted ? "bg-red-500/20 border border-red-400/40 text-red-400" : "pl-glass pl-text-cyan"}`} title={muted ? "取消静音" : "静音"}>
               {muted ? <MicOff size={22} /> : <Mic size={22} />}
             </button>
-            <button onClick={endCall} className="w-14 h-14 rounded-full bg-red-500/20 border border-red-400/40 text-red-400 flex items-center justify-center hover:scale-110 transition-transform">
+            <button onClick={() => endCall()} className="w-14 h-14 rounded-full bg-red-500/20 border border-red-400/40 text-red-400 flex items-center justify-center hover:scale-110 transition-transform">
               <PhoneOff size={24} />
             </button>
           </div>
         )}
 
         {(callState === "ringing" && !voiceCallIncoming) && (
-          <button onClick={endCall} className="w-14 h-14 rounded-full bg-red-500/20 border border-red-400/40 text-red-400 flex items-center justify-center hover:scale-110 transition-transform">
+          <button onClick={() => endCall()} className="w-14 h-14 rounded-full bg-red-500/20 border border-red-400/40 text-red-400 flex items-center justify-center hover:scale-110 transition-transform">
             <PhoneOff size={24} />
           </button>
         )}

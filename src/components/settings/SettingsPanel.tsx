@@ -104,12 +104,10 @@ export default function SettingsPanel() {
     setUpdateState("checking");
     setDownloadMsg("");
     try {
-      const res = await fetch(`https://api.github.com/repos/${GH_REPO}/releases/latest`);
-      if (!res.ok) throw new Error("HTTP " + res.status);
-      const rel = await res.json();
+      const rel = await api.checkLatestRelease();
       const tag = String(rel.tag_name || "").replace(/^v/, "");
-      const cur = String(appVersion || "1.4.1").replace(/^v/, "");
-      setUpdateInfo({ tag: rel.tag_name, name: rel.name || "", url: rel.html_url || `https://github.com/${GH_REPO}/releases` });
+      const cur = String(appVersion || "1.4.2").replace(/^v/, "");
+      setUpdateInfo({ tag: rel.tag_name || tag, name: rel.name || "", url: rel.html_url || `https://github.com/${GH_REPO}/releases` });
       setUpdateState(cmpVersion(tag, cur) > 0 ? "available" : "latest");
     } catch (e) {
       console.error("check update:", e);
@@ -122,16 +120,19 @@ export default function SettingsPanel() {
     setDownloading(true);
     setDownloadMsg("");
     try {
-      const res = await fetch(`https://api.github.com/repos/${GH_REPO}/releases/latest`);
-      if (!res.ok) throw new Error("HTTP " + res.status);
-      const rel = await res.json();
+      const rel = await api.checkLatestRelease();
       const asset = pickAsset(rel.assets || []);
       if (!asset) throw new Error("no asset for this platform");
       // Backend downloads from GitHub (follows redirects, no CORS issues)
       const path = await api.downloadReleaseAsset(asset.browser_download_url, asset.name);
       setDownloadMsg(`已下载到：${path}`);
-      alert(`新版本安装包已下载到：
+      try {
+        const { openPath } = await import("@tauri-apps/plugin-opener");
+        await openPath(path); // open/install the downloaded package
+      } catch {
+        alert(`新版本安装包已下载到：
 ${path}`);
+      }
     } catch (e) {
       console.error("download update:", e);
       setDownloadMsg("自动下载失败，已打开 Release 页面");
@@ -285,7 +286,7 @@ ${path}`);
           <div className="space-y-2">
             <div className="flex justify-between text-xs">
               <span className="pl-text-dim">当前版本</span>
-              <span className="font-mono pl-text-cyan">v{appVersion || "1.4.1"}</span>
+              <span className="font-mono pl-text-cyan">v{appVersion || "1.4.2"}</span>
             </div>
             <div className="flex justify-between text-xs">
               <span className="pl-text-dim">加密方案</span>

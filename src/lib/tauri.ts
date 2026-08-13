@@ -104,4 +104,6 @@ export const api = {
     invoke<string>("save_downloaded_file", { fileName, dataB64 }),
   downloadReleaseAsset: (url: string, fileName: string) =>
     invoke<string>("download_release_asset", { url, fileName }),
+  checkLatestRelease: () =>
+    invoke<{ tag_name?: string; name?: string; html_url?: string; assets?: { name: string; browser_download_url: string }[] }>("check_latest_release"),
 };
