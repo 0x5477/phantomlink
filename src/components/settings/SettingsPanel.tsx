@@ -127,14 +127,8 @@ export default function SettingsPanel() {
       const rel = await res.json();
       const asset = pickAsset(rel.assets || []);
       if (!asset) throw new Error("no asset for this platform");
-      const dl = await fetch(asset.browser_download_url);
-      if (!dl.ok) throw new Error("download HTTP " + dl.status);
-      const buf = await dl.arrayBuffer();
-      const bytes = new Uint8Array(buf);
-      let b64 = "";
-      const CH = 0x8000;
-      for (let i = 0; i < bytes.length; i += CH) b64 += String.fromCharCode(...bytes.subarray(i, i + CH));
-      const path = await api.saveDownloadedFile(asset.name, btoa(b64));
+      // Backend downloads from GitHub (follows redirects, no CORS issues)
+      const path = await api.downloadReleaseAsset(asset.browser_download_url, asset.name);
       setDownloadMsg(`已下载到：${path}`);
       alert(`新版本安装包已下载到：
 ${path}`);

@@ -102,4 +102,6 @@ export const api = {
   // v1.4.1: save a downloaded release asset into the user's Downloads folder
   saveDownloadedFile: (fileName: string, dataB64: string) =>
     invoke<string>("save_downloaded_file", { fileName, dataB64 }),
+  downloadReleaseAsset: (url: string, fileName: string) =>
+    invoke<string>("download_release_asset", { url, fileName }),
 };

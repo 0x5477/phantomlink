@@ -214,6 +214,48 @@ fn save_downloaded_file(file_name: String, data_b64: String) -> Result<String, S
     Ok(path.to_string_lossy().into_owned())
 }
 
+fn downloads_dir() -> std::path::PathBuf {
+    if let Some(home) = std::env::var_os("HOME") {
+        std::path::PathBuf::from(home).join("Downloads")
+    } else if let Some(local) = std::env::var_os("USERPROFILE") {
+        std::path::PathBuf::from(local).join("Downloads")
+    } else {
+        std::env::temp_dir()
+    }
+}
+
+/// Download a GitHub release asset (follows redirects) and save it to Downloads.
+#[tauri::command]
+fn download_release_asset(
+    url: String,
+    file_name: String,
+    state: State<'_, Arc<AppStateData>>,
+) -> Result<String, String> {
+    let url2 = url.clone();
+    let bytes = state.runtime.block_on(async move {
+        let client = reqwest::Client::builder()
+            .user_agent(format!("PhantomLink/{}", APP_VERSION))
+            .build()
+            .map_err(|e| format!("http client: {e}"))?;
+        let resp = client
+            .get(&url2)
+            .send()
+            .await
+            .map_err(|e| format!("download {url2}: {e}"))?;
+        if !resp.status().is_success() {
+            return Err(format!("HTTP {}", resp.status()));
+        }
+        resp.bytes().await.map_err(|e| format!("read body: {e}"))
+    })?;
+
+    let dir = downloads_dir();
+    std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir downloads: {e}"))?;
+    let safe_name = file_name.replace(['/', '\\', '\0'], "_");
+    let path = dir.join(safe_name);
+    std::fs::write(&path, &bytes).map_err(|e| format!("write download: {e}"))?;
+    Ok(path.to_string_lossy().into_owned())
+}
+
 fn record_failure(state: State<'_, Arc<AppStateData>>) -> Result<bool, String> {
     let mut attempts = state.app.failed_attempts.lock().unwrap();
     *attempts += 1;
@@ -1689,7 +1731,7 @@ pub fn run() {
            get_devices, get_local_ip, add_device, delete_device, discover_peers, get_connected_peers,
            get_conversations, get_or_create_private_conversation, reset_unread,
            get_messages, save_local_message, search_messages, update_message_status, burn_message, delete_message,
-           get_setting, set_setting, get_all_settings, save_downloaded_file,
+           get_setting, set_setting, get_all_settings, save_downloaded_file, download_release_asset,
            save_file_from_base64, load_file_to_base64,
            start_network, stop_network, connect_to_peer, send_frame_to_peer, send_message_frame, send_file_frame,
            export_backup, import_backup,
